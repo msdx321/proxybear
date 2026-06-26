@@ -1,0 +1,37 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    name: Build and release
+    runs-on: macos-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-bundle
+        run: cargo install cargo-bundle
+
+      - name: Build and bundle
+        run: cargo bundle --release
+
+      - name: Package .app as zip
+        run: |
+          cd target/release/bundle/osx
+          zip -r ../ProxyBear.app.zip ProxyBear.app
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            target/release/bundle/ProxyBear.app.zip
+            target/release/bundle/dmg/ProxyBear.dmg
+          generate_release_notes: true
