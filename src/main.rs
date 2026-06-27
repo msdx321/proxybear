@@ -48,8 +48,6 @@ pub enum SettingsField {
     KeyPassword(String),
     SshPassword(String),
     LocalAddr(String),
-    Autostart(bool),
-    AutoConnect(bool),
     Save,
     SaveAndStart,
     Stop,
@@ -66,8 +64,6 @@ pub struct SettingsForm {
     pub key_password: String,
     pub ssh_password: String,
     pub local_addr: String,
-    pub autostart: bool,
-    pub auto_connect: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -259,8 +255,6 @@ impl ProxyBear {
             key_password: config.key_password.clone(),
             ssh_password: config.ssh_password.clone(),
             local_addr: config.local_addr.clone(),
-            autostart: config.autostart,
-            auto_connect: config.auto_connect,
         };
         let startup_task = if auto_connect {
             iced::Task::done(Message::AutoConnect)
@@ -384,7 +378,6 @@ impl ProxyBear {
             MenuAction::ToggleAutostart => {
                 let mut config = self.config.lock().unwrap().clone();
                 config.autostart = !config.autostart;
-                self.form.autostart = config.autostart;
                 self.tray.autostart.set_checked(config.autostart);
                 let _ = config::set_autostart(&self.paths, config.autostart);
                 let _ = save_config(&self.paths, &config);
@@ -394,7 +387,6 @@ impl ProxyBear {
             MenuAction::ToggleAutoConnect => {
                 let mut config = self.config.lock().unwrap().clone();
                 config.auto_connect = !config.auto_connect;
-                self.form.auto_connect = config.auto_connect;
                 self.tray.auto_connect.set_checked(config.auto_connect);
                 let _ = save_config(&self.paths, &config);
                 *self.config.lock().unwrap() = config;
@@ -417,8 +409,6 @@ impl ProxyBear {
             SettingsField::KeyPassword(v) => self.form.key_password = v,
             SettingsField::SshPassword(v) => self.form.ssh_password = v,
             SettingsField::LocalAddr(v) => self.form.local_addr = v,
-            SettingsField::Autostart(v) => self.form.autostart = v,
-            SettingsField::AutoConnect(v) => self.form.auto_connect = v,
             SettingsField::Save => {
                 self.save_settings();
             }
@@ -445,7 +435,7 @@ impl ProxyBear {
             }
         } else {
             let (id, open_task) = iced::window::open(iced::window::Settings {
-                size: iced::Size::new(440.0, 620.0),
+                size: iced::Size::new(440.0, 520.0),
                 ..Default::default()
             });
             self.settings_open = true;
@@ -583,9 +573,6 @@ impl ProxyBear {
         config.key_password = f.key_password.clone();
         config.ssh_password = f.ssh_password.clone();
         config.local_addr = f.local_addr.trim().to_string();
-        config.autostart = f.autostart;
-        config.auto_connect = f.auto_connect;
-        let _ = config::set_autostart(&self.paths, config.autostart);
         let _ = save_config(&self.paths, &config);
         *self.config.lock().unwrap() = config;
     }

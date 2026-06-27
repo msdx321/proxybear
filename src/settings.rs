@@ -1,6 +1,4 @@
-use iced::widget::{
-    Space, button, column, container, pick_list, row, rule, text, text_input, toggler,
-};
+use iced::widget::{Space, button, column, container, row, rule, text, text_input};
 use iced::{Alignment, Element, Length};
 
 use crate::{SettingsField, SettingsForm};
@@ -24,15 +22,24 @@ pub fn view<'a>(
         .on_input(SettingsField::LocalAddr)
         .padding(6);
 
-    const METHODS: &[&str] = &["Public Key", "Password"];
-    let selected = if form.auth_method == "password" {
-        &METHODS[1]
-    } else {
-        &METHODS[0]
-    };
-    let method_pick = pick_list(METHODS, Some(selected), |s: &str| {
-        SettingsField::AuthMethod(s.to_string())
-    });
+    let is_key = form.auth_method != "password";
+    let method_row = row![
+        button("Public Key")
+            .style(if is_key {
+                button::primary
+            } else {
+                button::secondary
+            })
+            .on_press(SettingsField::AuthMethod("key".into())),
+        button("Password")
+            .style(if !is_key {
+                button::primary
+            } else {
+                button::secondary
+            })
+            .on_press(SettingsField::AuthMethod("password".into())),
+    ]
+    .spacing(0);
 
     let auth_fields: Element<'a, SettingsField> = if form.auth_method == "password" {
         let pw = text_input("SSH password", &form.ssh_password)
@@ -81,23 +88,13 @@ pub fn view<'a>(
             rule::horizontal(1),
             // ── Authentication ──
             text("AUTHENTICATION").size(11),
-            column![text("Method").size(12), method_pick].spacing(2),
+            method_row,
             auth_fields,
             Space::new().height(4),
             rule::horizontal(1),
             // ── Local ──
             text("LOCAL").size(11),
             column![text("SOCKS bind address").size(12), local_input].spacing(2),
-            Space::new().height(4),
-            rule::horizontal(1),
-            // ── Options ──
-            text("OPTIONS").size(11),
-            toggler(form.autostart)
-                .on_toggle(SettingsField::Autostart)
-                .label("Launch at login"),
-            toggler(form.auto_connect)
-                .on_toggle(SettingsField::AutoConnect)
-                .label("Auto-connect on open"),
             Space::new().height(4),
             rule::horizontal(1),
             // ── Actions ──
