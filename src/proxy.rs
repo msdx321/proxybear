@@ -24,6 +24,9 @@ struct SessionState {
     handle: client::Handle<Client>,
     config: Arc<Mutex<AppConfig>>,
     paths: AppPaths,
+    /// Set to true when `channel_open_direct_tcpip` fails, cleared on successful reconnect.
+    /// Lets subsequent callers skip the dead handle and go straight to reconnection.
+    dead: bool,
 }
 
 pub async fn run_proxy(
@@ -49,6 +52,7 @@ pub async fn run_proxy(
         handle,
         config: Arc::clone(&config),
         paths,
+        dead: false,
     }));
     stats.clear_error();
     stats.set_status(format!("Listening on {local_addr}"));
@@ -103,14 +107,21 @@ async fn handle_client(
 }
 
 /// Open a direct-tcpip channel, reconnecting the SSH session if it has died.
+///
+/// Holds the session lock across the first attempt and any reconnection so that
+/// concurrent SOCKS connections serialize on the mutex — only one task
+/// reconnects; the others wake up to a fresh handle.  A `dead` flag on the
+/// session state avoids retrying a handle that is already known to be dead.
 async fn open_channel_with_retry(
     session: &Arc<TokioMutex<SessionState>>,
     request: &SocksRequest,
     peer_addr: &SocketAddr,
     stats: &ProxyStats,
 ) -> Result<russh::Channel<client::Msg>> {
-    {
-        let state = session.lock().await;
+    let mut state = session.lock().await;
+
+    // Only try the current handle if it isn't already known dead.
+    if !state.dead {
         match state
             .handle
             .channel_open_direct_tcpip(
@@ -122,17 +133,21 @@ async fn open_channel_with_retry(
             .await
         {
             Ok(channel) => return Ok(channel),
-            Err(e) => log::warn!("Channel open failed (session may have died): {e}"),
+            Err(e) => {
+                log::warn!("Channel open failed (session may have died): {e}");
+                state.dead = true;
+            }
         }
     }
 
+    // Session is dead — reconnect while still holding the lock.
     log::info!("Reconnecting SSH session...");
     stats.ssh_disconnected();
-    let mut state = session.lock().await;
     let new_handle = connect_ssh(Arc::clone(&state.config), state.paths.clone())
         .await
         .context("failed to reconnect SSH session")?;
     state.handle = new_handle;
+    state.dead = false;
     stats.ssh_connected();
     log::info!("SSH session reconnected");
 
