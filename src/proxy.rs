@@ -109,7 +109,7 @@ async fn handle_client(
 
     write_socks_reply(&mut stream, 0x00).await?;
     pump(stream, &mut channel, stats).await?;
-    // Session is shared across all connections — do not disconnect.
+    // Session is shared across all connections, so do not disconnect.
     Ok(())
 }
 

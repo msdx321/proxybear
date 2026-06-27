@@ -4,11 +4,11 @@ A native macOS menu-bar app that runs a local SOCKS5 proxy over SSH.
 
 ## Features
 
-- **Menu-bar only** — no Dock icon, lives in the menu bar with a bear tray icon
-- **SOCKS5 over SSH** — tunnels your traffic through an SSH server
-- **No authentication** — local proxy is unauthenticated, for use by local tools
-- **Launch at login** — optional LaunchAgent for autostart
-- **Settings UI** — configure server, key, and bind address via a native WebView window
+- **Menu-bar only**: no Dock icon, lives in the menu bar with a bear tray icon
+- **SOCKS5 over SSH**: tunnels your traffic through an SSH server
+- **No local authentication**: local proxy is unauthenticated, for use by local tools
+- **Launch at login**: optional LaunchAgent for autostart
+- **Settings UI**: configure server, authentication, and bind address in the settings window
 
 ## Installation
 
