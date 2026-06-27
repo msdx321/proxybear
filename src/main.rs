@@ -34,14 +34,15 @@ enum MenuAction { StartStop, Settings, ToggleAutostart, ToggleAutoConnect, Quit,
 #[derive(Debug, Clone)]
 pub enum SettingsField {
     Server(String), Username(String), Port(String), KeyPath(String),
-    LocalAddr(String), Autostart(bool), AutoConnect(bool),
+    KeyPassword(String), LocalAddr(String), Autostart(bool), AutoConnect(bool),
     Save, SaveAndStart, Stop, ChooseKey,
 }
 
 #[derive(Debug, Clone)]
 pub struct SettingsForm {
     pub server: String, pub username: String, pub port: String,
-    pub key_path: String, pub local_addr: String, pub autostart: bool,
+    pub key_path: String, pub key_password: String,
+    pub local_addr: String, pub autostart: bool,
     pub auto_connect: bool,
 }
 
@@ -184,6 +185,7 @@ impl ProxyBear {
         let form = SettingsForm {
             server: config.server.clone(), username: config.username.clone(),
             port: config.port.to_string(), key_path: config.key_path.clone(),
+            key_password: config.key_password.clone(),
             local_addr: config.local_addr.clone(), autostart: config.autostart,
             auto_connect: config.auto_connect,
         };
@@ -306,6 +308,7 @@ impl ProxyBear {
             SettingsField::Username(v) => self.form.username = v,
             SettingsField::Port(v) => self.form.port = v,
             SettingsField::KeyPath(v) => self.form.key_path = v,
+            SettingsField::KeyPassword(v) => self.form.key_password = v,
             SettingsField::LocalAddr(v) => self.form.local_addr = v,
             SettingsField::Autostart(v) => self.form.autostart = v,
             SettingsField::AutoConnect(v) => self.form.auto_connect = v,
@@ -323,7 +326,7 @@ impl ProxyBear {
             if let Some(id) = self.settings_window.take() { return iced::window::close(id); }
         } else {
             let (id, open_task) = iced::window::open(iced::window::Settings {
-                size: iced::Size::new(440.0, 520.0), ..Default::default()
+                size: iced::Size::new(440.0, 580.0), ..Default::default()
             });
             self.settings_open = true; self.settings_window = Some(id);
             self.refresh_stats();
@@ -412,6 +415,7 @@ impl ProxyBear {
         config.username = f.username.trim().to_string();
         config.port = f.port.parse().unwrap_or(22);
         config.key_path = f.key_path.trim().to_string();
+        config.key_password = f.key_password.clone();
         config.local_addr = f.local_addr.trim().to_string();
         config.autostart = f.autostart;
         config.auto_connect = f.auto_connect;

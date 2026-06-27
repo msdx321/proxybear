@@ -108,7 +108,13 @@ async fn connect_ssh(
     paths: AppPaths,
 ) -> Result<client::Handle<Client>> {
     let snapshot = config.lock().unwrap().clone();
-    let key_pair = load_secret_key(&snapshot.key_path, None).context("failed to load SSH key")?;
+    let passphrase = if snapshot.key_password.is_empty() {
+        None
+    } else {
+        Some(snapshot.key_password.as_str())
+    };
+    let key_pair =
+        load_secret_key(&snapshot.key_path, passphrase).context("failed to load SSH key")?;
     let ssh_config = Arc::new(client::Config {
         nodelay: true,
         ..Default::default()

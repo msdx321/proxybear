@@ -13,6 +13,8 @@ pub fn view<'a>(form: &'a SettingsForm, stats_text: &'a str, config_path: &'a st
         .on_input(SettingsField::Port).padding(6).width(88);
     let key_input = text_input("/Users/me/.ssh/id_ed25519", &form.key_path)
         .on_input(SettingsField::KeyPath).padding(6);
+    let password_input = text_input("key password (leave empty if none)", &form.key_password)
+        .on_input(SettingsField::KeyPassword).secure(true).padding(6);
     let local_input = text_input("127.0.0.1:1080", &form.local_addr)
         .on_input(SettingsField::LocalAddr).padding(6);
 
@@ -37,6 +39,8 @@ pub fn view<'a>(form: &'a SettingsForm, stats_text: &'a str, config_path: &'a st
                     button("Choose\u{2026}").on_press(SettingsField::ChooseKey),
                 ].align_y(Alignment::End),
             ].spacing(2),
+            // Key password
+            column![text("Key password").size(12), password_input].spacing(2),
             // Local bind
             column![text("SOCKS bind").size(12), local_input].spacing(2),
             // Autostart
