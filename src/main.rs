@@ -158,7 +158,7 @@ define_class!(
 );
 
 #[cfg(target_os = "macos")]
-thread_local! { static MENU_IS_OPEN: Cell<bool> = Cell::new(false); }
+thread_local! { static MENU_IS_OPEN: Cell<bool> = const { Cell::new(false) }; }
 
 struct ProxyHandle {
     shutdown: Option<oneshot::Sender<()>>,

@@ -1,9 +1,10 @@
 use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use russh::{
     ChannelMsg, Disconnect, client,
     keys::{HashAlg, PrivateKeyWithHashAlg, load_secret_key, ssh_key},
@@ -12,12 +13,16 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     sync::{Mutex as TokioMutex, oneshot},
+    time::{sleep, timeout},
 };
 
 use crate::{
     config::{AppConfig, AppPaths, save_config},
     stats::ProxyStats,
 };
+
+const CHANNEL_OPEN_RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
+const SSH_PING_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Shared SSH session reused across all SOCKS connections.
 struct SessionState {
@@ -61,8 +66,10 @@ pub async fn run_proxy(
     loop {
         tokio::select! {
             _ = &mut shutdown => {
-                stats.ssh_disconnected();
                 let state = session.lock().await;
+                if !state.dead {
+                    stats.ssh_disconnected();
+                }
                 state.handle.disconnect(Disconnect::ByApplication, "", "English").await.ok();
                 stats.set_status("Stopped");
                 return Ok(());
@@ -109,9 +116,10 @@ async fn handle_client(
 /// Open a direct-tcpip channel, reconnecting the SSH session if it has died.
 ///
 /// Holds the session lock across the first attempt and any reconnection so that
-/// concurrent SOCKS connections serialize on the mutex — only one task
-/// reconnects; the others wake up to a fresh handle.  A `dead` flag on the
-/// session state avoids retrying a handle that is already known to be dead.
+/// concurrent SOCKS connections serialize on the mutex. Only one task
+/// reconnects; the others wake up to a fresh handle. A `dead` flag on the
+/// session state avoids retrying or recounting a handle that is already known
+/// to be dead.
 async fn open_channel_with_retry(
     session: &Arc<TokioMutex<SessionState>>,
     request: &SocksRequest,
@@ -120,29 +128,91 @@ async fn open_channel_with_retry(
 ) -> Result<russh::Channel<client::Msg>> {
     let mut state = session.lock().await;
 
-    // Only try the current handle if it isn't already known dead.
+    if !state.dead && state.handle.is_closed() {
+        log::warn!("SSH session handle is closed");
+        mark_session_dead(&mut state, stats);
+    }
+
     if !state.dead {
-        match state
-            .handle
-            .channel_open_direct_tcpip(
-                request.host.clone(),
-                request.port.into(),
-                peer_addr.ip().to_string(),
-                peer_addr.port().into(),
-            )
-            .await
-        {
+        match open_channel_with_stall_check(&state.handle, request, peer_addr).await {
             Ok(channel) => return Ok(channel),
-            Err(e) => {
-                log::warn!("Channel open failed (session may have died): {e}");
-                state.dead = true;
+            Err(ChannelAttemptError::Target(error)) => {
+                return Err(error).context("SSH server failed to open target channel");
+            }
+            Err(ChannelAttemptError::Session(error)) => {
+                log::warn!("SSH session failed: {error}");
+                mark_session_dead(&mut state, stats);
             }
         }
     }
 
-    // Session is dead — reconnect while still holding the lock.
+    reconnect_session(&mut state, stats).await?;
+    open_direct_tcpip(&state.handle, request, peer_addr)
+        .await
+        .context("failed to open SSH channel after reconnect")
+}
+
+enum ChannelAttemptError {
+    Target(russh::Error),
+    Session(anyhow::Error),
+}
+
+async fn open_channel_with_stall_check(
+    handle: &client::Handle<Client>,
+    request: &SocksRequest,
+    peer_addr: &SocketAddr,
+) -> std::result::Result<russh::Channel<client::Msg>, ChannelAttemptError> {
+    let open = open_direct_tcpip(handle, request, peer_addr);
+    tokio::pin!(open);
+
+    tokio::select! {
+        result = &mut open => classify_channel_open(result),
+        () = sleep(CHANNEL_OPEN_RESPONSE_TIMEOUT) => {
+            log::warn!(
+                "SSH channel open has not responded after {CHANNEL_OPEN_RESPONSE_TIMEOUT:?}; checking session liveness"
+            );
+            let ping = timeout(SSH_PING_TIMEOUT, handle.send_ping());
+            tokio::pin!(ping);
+            tokio::select! {
+                result = &mut open => classify_channel_open(result),
+                result = &mut ping => {
+                    match result {
+                        Ok(Ok(())) => {
+                            log::info!("SSH session answered ping; continuing to wait for channel open");
+                            classify_channel_open(open.as_mut().await)
+                        }
+                        Ok(Err(error)) => Err(ChannelAttemptError::Session(
+                            anyhow::Error::new(error).context("SSH ping failed after channel-open stall"),
+                        )),
+                        Err(_) => Err(ChannelAttemptError::Session(anyhow!(
+                            "SSH ping timed out after {SSH_PING_TIMEOUT:?}"
+                        ))),
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn classify_channel_open(
+    result: std::result::Result<russh::Channel<client::Msg>, russh::Error>,
+) -> std::result::Result<russh::Channel<client::Msg>, ChannelAttemptError> {
+    match result {
+        Ok(channel) => Ok(channel),
+        Err(error @ russh::Error::ChannelOpenFailure(_)) => Err(ChannelAttemptError::Target(error)),
+        Err(error) => Err(ChannelAttemptError::Session(anyhow::Error::new(error))),
+    }
+}
+
+fn mark_session_dead(state: &mut SessionState, stats: &ProxyStats) {
+    if !state.dead {
+        state.dead = true;
+        stats.ssh_disconnected();
+    }
+}
+
+async fn reconnect_session(state: &mut SessionState, stats: &ProxyStats) -> Result<()> {
     log::info!("Reconnecting SSH session...");
-    stats.ssh_disconnected();
     let new_handle = connect_ssh(Arc::clone(&state.config), state.paths.clone())
         .await
         .context("failed to reconnect SSH session")?;
@@ -150,9 +220,15 @@ async fn open_channel_with_retry(
     state.dead = false;
     stats.ssh_connected();
     log::info!("SSH session reconnected");
+    Ok(())
+}
 
-    state
-        .handle
+async fn open_direct_tcpip(
+    handle: &client::Handle<Client>,
+    request: &SocksRequest,
+    peer_addr: &SocketAddr,
+) -> std::result::Result<russh::Channel<client::Msg>, russh::Error> {
+    handle
         .channel_open_direct_tcpip(
             request.host.clone(),
             request.port.into(),
@@ -160,7 +236,6 @@ async fn open_channel_with_retry(
             peer_addr.port().into(),
         )
         .await
-        .context("failed to open SSH channel after reconnect")
 }
 
 async fn connect_ssh(
