@@ -21,8 +21,10 @@ pub struct AppConfig {
     pub server: String,
     pub username: String,
     pub port: u16,
+    pub auth_method: String,
     pub key_path: String,
     pub key_password: String,
+    pub ssh_password: String,
     pub local_addr: String,
     pub autostart: bool,
     pub auto_connect: bool,
@@ -35,8 +37,10 @@ impl Default for AppConfig {
             server: String::new(),
             username: env::var("USER").unwrap_or_default(),
             port: 22,
+            auth_method: "key".into(),
             key_path: String::new(),
             key_password: String::new(),
+            ssh_password: String::new(),
             local_addr: "127.0.0.1:1080".to_string(),
             autostart: false,
             auto_connect: false,
@@ -53,7 +57,7 @@ impl AppConfig {
         if self.username.trim().is_empty() {
             bail!("username is empty");
         }
-        if self.key_path.trim().is_empty() {
+        if self.auth_method != "password" && self.key_path.trim().is_empty() {
             bail!("key path is empty");
         }
         self.local_addr

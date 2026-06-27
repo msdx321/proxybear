@@ -108,13 +108,6 @@ async fn connect_ssh(
     paths: AppPaths,
 ) -> Result<client::Handle<Client>> {
     let snapshot = config.lock().unwrap().clone();
-    let passphrase = if snapshot.key_password.is_empty() {
-        None
-    } else {
-        Some(snapshot.key_password.as_str())
-    };
-    let key_pair =
-        load_secret_key(&snapshot.key_path, passphrase).context("failed to load SSH key")?;
     let ssh_config = Arc::new(client::Config {
         nodelay: true,
         ..Default::default()
@@ -128,19 +121,35 @@ async fn connect_ssh(
     .await
     .with_context(|| format!("failed to connect SSH server {}", snapshot.server))?;
 
-    let auth_result = session
-        .authenticate_publickey(
-            snapshot.username,
-            PrivateKeyWithHashAlg::new(
-                Arc::new(key_pair),
-                session.best_supported_rsa_hash().await?.flatten(),
-            ),
-        )
-        .await
-        .context("SSH public key authentication failed")?;
-
-    if !auth_result.success() {
-        bail!("SSH public key authentication was rejected");
+    if snapshot.auth_method == "password" {
+        let auth_result = session
+            .authenticate_password(snapshot.username, snapshot.ssh_password)
+            .await
+            .context("SSH password authentication failed")?;
+        if !auth_result.success() {
+            bail!("SSH password authentication was rejected");
+        }
+    } else {
+        let passphrase = if snapshot.key_password.is_empty() {
+            None
+        } else {
+            Some(snapshot.key_password.as_str())
+        };
+        let key_pair =
+            load_secret_key(&snapshot.key_path, passphrase).context("failed to load SSH key")?;
+        let auth_result = session
+            .authenticate_publickey(
+                snapshot.username,
+                PrivateKeyWithHashAlg::new(
+                    Arc::new(key_pair),
+                    session.best_supported_rsa_hash().await?.flatten(),
+                ),
+            )
+            .await
+            .context("SSH public key authentication failed")?;
+        if !auth_result.success() {
+            bail!("SSH public key authentication was rejected");
+        }
     }
 
     Ok(session)
