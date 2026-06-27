@@ -6,6 +6,7 @@ mod stats;
 
 use std::cell::Cell;
 use std::fs;
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -28,6 +29,61 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject};
 #[cfg(target_os = "macos")]
 use objc2::{ClassType, class, define_class, msg_send};
+
+/// A file writer that rotates to `.old.log` when it exceeds `max_size` bytes,
+/// keeping disk usage bounded.
+struct RotatingWriter {
+    file: fs::File,
+    path: PathBuf,
+    written: u64,
+    max_size: u64,
+}
+
+impl RotatingWriter {
+    fn new(path: PathBuf, max_size: u64) -> io::Result<Self> {
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)?;
+        let written = file.metadata()?.len();
+        Ok(Self {
+            file,
+            path,
+            written,
+            max_size,
+        })
+    }
+}
+
+impl Write for RotatingWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if self.written + buf.len() as u64 > self.max_size {
+            let old_path = self.path.with_extension("old.log");
+            let _ = fs::remove_file(&old_path);
+            if fs::rename(&self.path, &old_path).is_err() {
+                // Rename failed — truncate in place as fallback.
+                self.file = fs::OpenOptions::new()
+                    .create(true)
+                    .write(true)
+                    .truncate(true)
+                    .open(&self.path)?;
+            } else {
+                self.file = fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&self.path)?;
+            }
+            self.written = 0;
+        }
+        let n = self.file.write(buf)?;
+        self.written += n as u64;
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.file.flush()
+    }
+}
 
 #[derive(Debug, Clone)]
 enum MenuAction {
@@ -221,7 +277,6 @@ struct ProxyBear {
     form: SettingsForm,
     stats_text: String,
     config_path: String,
-    settings_open: bool,
     settings_window: Option<iced::window::Id>,
     last_status: String,
     last_stats: String,
@@ -242,13 +297,13 @@ impl ProxyBear {
         let paths = app_paths().expect("app paths");
         // Init logging before anything that might log
         let _ = fs::create_dir_all(&paths.config_dir);
-        let log_file = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(paths.config_dir.join("proxybear.log"))
-            .expect("open log file");
+        let log_writer = RotatingWriter::new(
+            paths.config_dir.join("proxybear.log"),
+            1024 * 1024, // 1 MiB
+        )
+        .expect("open log file");
         env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
-            .target(env_logger::Target::Pipe(Box::new(log_file)))
+            .target(env_logger::Target::Pipe(Box::new(log_writer)))
             .init();
         log::info!("ProxyBear starting");
         let config = load_config(&paths).expect("load config");
@@ -284,7 +339,6 @@ impl ProxyBear {
                 form,
                 stats_text: String::new(),
                 config_path,
-                settings_open: false,
                 settings_window: None,
                 last_status: String::new(),
                 last_stats: String::new(),
@@ -321,7 +375,6 @@ impl ProxyBear {
             }
             Message::Window(id, ev) => {
                 if matches!(ev, iced::window::Event::Closed) && self.settings_window == Some(id) {
-                    self.settings_open = false;
                     self.settings_window = None;
                 }
                 iced::Task::none()
@@ -330,7 +383,7 @@ impl ProxyBear {
     }
 
     fn view(&self, window: iced::window::Id) -> iced::Element<'_, Message> {
-        if Some(window) == self.settings_window && self.settings_open {
+        if Some(window) == self.settings_window {
             return settings::view(&self.form, &self.stats_text, &self.config_path)
                 .map(Message::Field);
         }
@@ -343,7 +396,7 @@ impl ProxyBear {
             proxy_sub(),
             iced::window::events().map(|(id, ev)| Message::Window(id, ev)),
         ];
-        if self.settings_open {
+        if self.settings_window.is_some() {
             subs.push(iced::time::every(Duration::from_secs(1)).map(|_| Message::Tick));
         }
         iced::Subscription::batch(subs)
@@ -440,8 +493,7 @@ impl ProxyBear {
     }
 
     fn toggle_settings(&mut self) -> iced::Task<Message> {
-        if self.settings_open {
-            self.settings_open = false;
+        if self.settings_window.is_some() {
             if let Some(id) = self.settings_window.take() {
                 return iced::window::close(id);
             }
@@ -450,7 +502,6 @@ impl ProxyBear {
                 size: iced::Size::new(440.0, 700.0),
                 ..Default::default()
             });
-            self.settings_open = true;
             self.settings_window = Some(id);
             self.refresh_stats();
             return open_task.then(iced::window::gain_focus);
@@ -463,13 +514,13 @@ impl ProxyBear {
     fn refresh_stats(&mut self) {
         let stats = self.stats.snapshot();
         self.stats_text = format!(
-            "{} | {} active | up {} | down {}",
+            "{} | SSH: {} ({} total) | up {} | down {}",
             stats.status,
-            stats.active_connections,
+            stats.ssh_current,
+            stats.ssh_total,
             format_bytes(stats.bytes_up),
             format_bytes(stats.bytes_down)
         );
-        self.config_path = self.paths.config_path.display().to_string();
         self.update_icon();
 
         #[cfg(target_os = "macos")]
@@ -492,9 +543,9 @@ impl ProxyBear {
             self.last_status = s;
         }
         let l = format!(
-            "{} total, {} active, up {}, down {}",
-            stats.total_connections,
-            stats.active_connections,
+            "{} SSH ({} total), up {}, down {}",
+            stats.ssh_current,
+            stats.ssh_total,
             format_bytes(stats.bytes_up),
             format_bytes(stats.bytes_down)
         );

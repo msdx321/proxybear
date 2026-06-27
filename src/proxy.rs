@@ -11,13 +11,20 @@ use russh::{
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
-    sync::oneshot,
+    sync::{Mutex as TokioMutex, oneshot},
 };
 
 use crate::{
     config::{AppConfig, AppPaths, save_config},
     stats::ProxyStats,
 };
+
+/// Shared SSH session reused across all SOCKS connections.
+struct SessionState {
+    handle: client::Handle<Client>,
+    config: Arc<Mutex<AppConfig>>,
+    paths: AppPaths,
+}
 
 pub async fn run_proxy(
     config: Arc<Mutex<AppConfig>>,
@@ -34,28 +41,38 @@ pub async fn run_proxy(
     let listener = TcpListener::bind(&local_addr)
         .await
         .with_context(|| format!("failed to bind {local_addr}"))?;
+
+    // Establish one SSH session to reuse across all SOCKS connections.
+    stats.set_status("Connecting to SSH server\u{2026}");
+    let handle = connect_ssh(Arc::clone(&config), paths.clone()).await?;
+    let session = Arc::new(TokioMutex::new(SessionState {
+        handle,
+        config: Arc::clone(&config),
+        paths,
+    }));
     stats.clear_error();
     stats.set_status(format!("Listening on {local_addr}"));
+    stats.ssh_connected();
 
     loop {
         tokio::select! {
             _ = &mut shutdown => {
+                stats.ssh_disconnected();
+                let state = session.lock().await;
+                state.handle.disconnect(Disconnect::ByApplication, "", "English").await.ok();
                 stats.set_status("Stopped");
                 return Ok(());
             }
             accepted = listener.accept() => {
                 let (stream, peer_addr) = accepted.context("failed to accept local connection")?;
-                let config = Arc::clone(&config);
-                let paths = paths.clone();
+                let session = Arc::clone(&session);
                 let stats = Arc::clone(&stats);
                 tokio::spawn(async move {
-                    stats.connection_opened();
-                    if let Err(error) = handle_client(stream, peer_addr, config, paths, Arc::clone(&stats)).await {
+                    if let Err(error) = handle_client(stream, peer_addr, session, Arc::clone(&stats)).await {
                         stats.set_error(error.to_string());
                     } else {
                         stats.clear_error();
                     }
-                    stats.connection_closed();
                 });
             }
         }
@@ -65,22 +82,62 @@ pub async fn run_proxy(
 async fn handle_client(
     mut stream: TcpStream,
     peer_addr: SocketAddr,
-    config: Arc<Mutex<AppConfig>>,
-    paths: AppPaths,
+    session: Arc<TokioMutex<SessionState>>,
     stats: Arc<ProxyStats>,
 ) -> Result<()> {
     negotiate_no_auth(&mut stream).await?;
     let request = read_socks_request(&mut stream).await?;
 
-    let session = match connect_ssh(Arc::clone(&config), paths).await {
-        Ok(session) => session,
+    let mut channel = match open_channel_with_retry(&session, &request, &peer_addr, &stats).await {
+        Ok(channel) => channel,
         Err(error) => {
             let _ = write_socks_reply(&mut stream, 0x05).await;
             return Err(error);
         }
     };
 
-    let mut channel = match session
+    write_socks_reply(&mut stream, 0x00).await?;
+    pump(stream, &mut channel, stats).await?;
+    // Session is shared across all connections — do not disconnect.
+    Ok(())
+}
+
+/// Open a direct-tcpip channel, reconnecting the SSH session if it has died.
+async fn open_channel_with_retry(
+    session: &Arc<TokioMutex<SessionState>>,
+    request: &SocksRequest,
+    peer_addr: &SocketAddr,
+    stats: &ProxyStats,
+) -> Result<russh::Channel<client::Msg>> {
+    {
+        let state = session.lock().await;
+        match state
+            .handle
+            .channel_open_direct_tcpip(
+                request.host.clone(),
+                request.port.into(),
+                peer_addr.ip().to_string(),
+                peer_addr.port().into(),
+            )
+            .await
+        {
+            Ok(channel) => return Ok(channel),
+            Err(e) => log::warn!("Channel open failed (session may have died): {e}"),
+        }
+    }
+
+    log::info!("Reconnecting SSH session...");
+    stats.ssh_disconnected();
+    let mut state = session.lock().await;
+    let new_handle = connect_ssh(Arc::clone(&state.config), state.paths.clone())
+        .await
+        .context("failed to reconnect SSH session")?;
+    state.handle = new_handle;
+    stats.ssh_connected();
+    log::info!("SSH session reconnected");
+
+    state
+        .handle
         .channel_open_direct_tcpip(
             request.host.clone(),
             request.port.into(),
@@ -88,21 +145,7 @@ async fn handle_client(
             peer_addr.port().into(),
         )
         .await
-    {
-        Ok(channel) => channel,
-        Err(error) => {
-            let _ = write_socks_reply(&mut stream, 0x05).await;
-            return Err(error).context("failed to open SSH direct-tcpip channel");
-        }
-    };
-
-    write_socks_reply(&mut stream, 0x00).await?;
-    pump(stream, &mut channel, stats).await?;
-    session
-        .disconnect(Disconnect::ByApplication, "", "English")
-        .await
-        .ok();
-    Ok(())
+        .context("failed to open SSH channel after reconnect")
 }
 
 async fn connect_ssh(
