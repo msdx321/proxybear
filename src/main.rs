@@ -435,7 +435,7 @@ impl ProxyBear {
             }
         } else {
             let (id, open_task) = iced::window::open(iced::window::Settings {
-                size: iced::Size::new(440.0, 520.0),
+                size: iced::Size::new(440.0, 540.0),
                 ..Default::default()
             });
             self.settings_open = true;
