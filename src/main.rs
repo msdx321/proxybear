@@ -191,7 +191,7 @@ impl ProxyBear {
             }
             MenuAction::Settings => self.toggle_settings(),
             MenuAction::ToggleAutostart => {
-                let mut config = self.config.lock().unwrap().clone();
+                let mut config = self.config_snapshot();
                 config.autostart = !config.autostart;
                 self.tray.autostart.set_checked(config.autostart);
                 let _ = config::set_autostart(&self.paths, config.autostart);
@@ -199,7 +199,7 @@ impl ProxyBear {
                 iced::Task::none()
             }
             MenuAction::ToggleAutoConnect => {
-                let mut config = self.config.lock().unwrap().clone();
+                let mut config = self.config_snapshot();
                 config.auto_connect = !config.auto_connect;
                 self.tray.auto_connect.set_checked(config.auto_connect);
                 self.save_config_state(config);
@@ -275,7 +275,7 @@ impl ProxyBear {
             return;
         }
 
-        let config = self.config.lock().unwrap().clone();
+        let config = self.config_snapshot();
         let running = self.proxy.is_some();
 
         let s = match &stats.last_error {
@@ -303,10 +303,9 @@ impl ProxyBear {
             self.tray.autostart.set_checked(au);
             self.last_autostart = au;
         }
-        let ac = self.config.lock().unwrap().auto_connect;
-        if ac != self.last_auto_connect {
-            self.tray.auto_connect.set_checked(ac);
-            self.last_auto_connect = ac;
+        if config.auto_connect != self.last_auto_connect {
+            self.tray.auto_connect.set_checked(config.auto_connect);
+            self.last_auto_connect = config.auto_connect;
         }
     }
 
@@ -363,10 +362,9 @@ impl ProxyBear {
     }
 
     fn save_settings(&self) {
-        let mut config = self.config.lock().unwrap().clone();
+        let mut config = self.config_snapshot();
         self.form.apply_to_config(&mut config);
-        let _ = save_config(&self.paths, &config);
-        *self.config.lock().unwrap() = config;
+        self.save_config_state(config);
     }
 
     fn save_config_state(&self, config: AppConfig) {
@@ -374,8 +372,12 @@ impl ProxyBear {
         *self.config.lock().unwrap() = config;
     }
 
+    fn config_snapshot(&self) -> AppConfig {
+        self.config.lock().unwrap().clone()
+    }
+
     fn choose_key(&mut self) {
-        let current = self.config.lock().unwrap().key_path.clone();
+        let current = self.config_snapshot().key_path;
         let mut builder = DialogBuilder::file().set_title("Choose SSH private key");
         if let Some(parent) = PathBuf::from(&current).parent().filter(|p| p.exists()) {
             builder = builder.set_location(parent);
