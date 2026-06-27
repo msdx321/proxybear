@@ -105,8 +105,11 @@ pub fn is_autostart_enabled(paths: &AppPaths) -> bool {
 
 pub fn set_autostart(paths: &AppPaths, enabled: bool) -> Result<()> {
     if enabled {
-        fs::create_dir_all(paths.launch_agent_path.parent().unwrap())
-            .context("failed to create LaunchAgents directory")?;
+        let launch_agent_dir = paths
+            .launch_agent_path
+            .parent()
+            .context("LaunchAgent path has no parent directory")?;
+        fs::create_dir_all(launch_agent_dir).context("failed to create LaunchAgents directory")?;
         fs::create_dir_all(&paths.config_dir).context("failed to create config directory")?;
 
         let program_arguments = launch_agent_program_arguments()?;

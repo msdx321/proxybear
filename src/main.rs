@@ -1,127 +1,32 @@
 mod config;
 mod icons;
+mod logging;
 mod proxy;
 mod settings;
 mod stats;
+mod tray;
 
-use std::cell::Cell;
-use std::fs;
-use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use anyhow::{Context, Result};
-use config::{AppConfig, AppPaths, app_paths, is_autostart_enabled, load_config, save_config};
 use iced::futures::{StreamExt, channel::mpsc};
-use icons::TrayIconState;
 use native_dialog::DialogBuilder;
-use stats::ProxyStats;
 use tokio::{runtime::Runtime, sync::oneshot, task::JoinHandle};
-use tray_icon::{
-    TrayIcon, TrayIconBuilder,
-    menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem},
-};
+use tray_icon::menu::MenuItem;
+
+use config::{AppConfig, AppPaths, app_paths, is_autostart_enabled, load_config, save_config};
+use icons::TrayIconState;
+use settings::{SettingsField, SettingsForm};
+use stats::ProxyStats;
+use tray::{MenuAction, TrayMenu};
+
+const PROXY_CHANNEL_SIZE: usize = 32;
+const SETTINGS_WINDOW_WIDTH: f32 = 440.0;
+const SETTINGS_WINDOW_HEIGHT: f32 = 700.0;
 
 #[cfg(target_os = "macos")]
-use objc2::rc::Retained;
-#[cfg(target_os = "macos")]
-use objc2::runtime::{AnyObject, NSObject};
-#[cfg(target_os = "macos")]
-use objc2::{ClassType, class, define_class, msg_send};
-
-/// A file writer that rotates to `.old.log` when it exceeds `max_size` bytes,
-/// keeping disk usage bounded.
-struct RotatingWriter {
-    file: fs::File,
-    path: PathBuf,
-    written: u64,
-    max_size: u64,
-}
-
-impl RotatingWriter {
-    fn new(path: PathBuf, max_size: u64) -> io::Result<Self> {
-        let file = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)?;
-        let written = file.metadata()?.len();
-        Ok(Self {
-            file,
-            path,
-            written,
-            max_size,
-        })
-    }
-}
-
-impl Write for RotatingWriter {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        if self.written + buf.len() as u64 > self.max_size {
-            let old_path = self.path.with_extension("old.log");
-            let _ = fs::remove_file(&old_path);
-            if fs::rename(&self.path, &old_path).is_err() {
-                // Rename failed — truncate in place as fallback.
-                self.file = fs::OpenOptions::new()
-                    .create(true)
-                    .write(true)
-                    .truncate(true)
-                    .open(&self.path)?;
-            } else {
-                self.file = fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(&self.path)?;
-            }
-            self.written = 0;
-        }
-        let n = self.file.write(buf)?;
-        self.written += n as u64;
-        Ok(n)
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.file.flush()
-    }
-}
-
-#[derive(Debug, Clone)]
-enum MenuAction {
-    StartStop,
-    Settings,
-    ToggleAutostart,
-    ToggleAutoConnect,
-    Quit,
-    MenuOpened,
-}
-
-#[derive(Debug, Clone)]
-pub enum SettingsField {
-    Server(String),
-    Username(String),
-    Port(String),
-    AuthMethod(String),
-    KeyPath(String),
-    KeyPassword(String),
-    SshPassword(String),
-    LocalAddr(String),
-    Save,
-    SaveAndStart,
-    Stop,
-    ChooseKey,
-}
-
-#[derive(Debug, Clone)]
-pub struct SettingsForm {
-    pub server: String,
-    pub username: String,
-    pub port: String,
-    pub auth_method: String,
-    pub key_path: String,
-    pub key_password: String,
-    pub ssh_password: String,
-    pub local_addr: String,
-}
+use objc2::{class, msg_send};
 
 #[derive(Debug, Clone)]
 enum Message {
@@ -133,138 +38,11 @@ enum Message {
     Window(iced::window::Id, iced::window::Event),
 }
 
-static MENU_TX: Mutex<Option<mpsc::Sender<MenuAction>>> = Mutex::new(None);
 static PROXY_TX: Mutex<Option<mpsc::Sender<Option<String>>>> = Mutex::new(None);
-
-#[cfg(target_os = "macos")]
-define_class!(
-    #[unsafe(super(NSObject))]
-    #[name = "ProxyBearMenuDelegate"]
-    pub struct MenuDelegate;
-
-    impl MenuDelegate {
-        #[unsafe(method(menuWillOpen:))]
-        fn menu_will_open(&self, _menu: &AnyObject) {
-            MENU_IS_OPEN.with(|c| c.set(true));
-            if let Some(tx) = MENU_TX.lock().unwrap().as_mut() {
-                let _ = tx.try_send(MenuAction::MenuOpened);
-            }
-        }
-        #[unsafe(method(menuDidClose:))]
-        fn menu_did_close(&self, _menu: &AnyObject) {
-            MENU_IS_OPEN.with(|c| c.set(false));
-        }
-    }
-);
-
-#[cfg(target_os = "macos")]
-thread_local! { static MENU_IS_OPEN: Cell<bool> = const { Cell::new(false) }; }
 
 struct ProxyHandle {
     shutdown: Option<oneshot::Sender<()>>,
     task: JoinHandle<()>,
-}
-
-struct TrayMenu {
-    tray: TrayIcon,
-    #[cfg(target_os = "macos")]
-    _delegate: Retained<MenuDelegate>,
-    icon_state: Cell<TrayIconState>,
-    status: MenuItem,
-    stats: MenuItem,
-    config: MenuItem,
-    start_stop: MenuItem,
-    autostart: CheckMenuItem,
-    auto_connect: CheckMenuItem,
-}
-
-impl TrayMenu {
-    fn new(paths: &AppPaths, auto_connect: bool) -> Result<Self> {
-        let menu = Menu::new();
-        let status = MenuItem::with_id("status", "Status: Stopped", false, None);
-        let stats = MenuItem::with_id("stats", "0 connections", false, None);
-        let config = MenuItem::with_id("config", "No server configured", false, None);
-        let start_stop = MenuItem::with_id("start_stop", "Start Proxy", true, None);
-        let settings = MenuItem::with_id("settings", "Settings\u{2026}", true, None);
-        let autostart = CheckMenuItem::with_id(
-            "autostart",
-            "Launch at Login",
-            true,
-            is_autostart_enabled(paths),
-            None,
-        );
-        let auto_connect =
-            CheckMenuItem::with_id("auto_connect", "Auto-Connect", true, auto_connect, None);
-        let quit = MenuItem::with_id("quit", "Quit", true, None);
-        let sep = PredefinedMenuItem::separator();
-        menu.append_items(&[
-            &status,
-            &stats,
-            &config,
-            &sep,
-            &start_stop,
-            &settings,
-            &autostart,
-            &auto_connect,
-            &sep,
-            &quit,
-        ])?;
-
-        let icon_state = TrayIconState::Unhappy;
-        let tray = TrayIconBuilder::new()
-            .with_icon(icons::tray_icon(icon_state)?)
-            .with_icon_as_template(true)
-            .with_tooltip("ProxyBear")
-            .with_menu(Box::new(menu))
-            .build()
-            .context("failed to create menu bar item")?;
-
-        #[cfg(target_os = "macos")]
-        let delegate: Retained<MenuDelegate> = unsafe { msg_send![MenuDelegate::class(), new] };
-        #[cfg(target_os = "macos")]
-        if let Some(si) = tray.ns_status_item() {
-            unsafe {
-                let m: Retained<AnyObject> = msg_send![&si, menu];
-                let _: () = msg_send![&m, setDelegate: &*delegate];
-            }
-        }
-
-        MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
-            let a = match event.id.as_ref() {
-                "start_stop" => Some(MenuAction::StartStop),
-                "settings" => Some(MenuAction::Settings),
-                "autostart" => Some(MenuAction::ToggleAutostart),
-                "auto_connect" => Some(MenuAction::ToggleAutoConnect),
-                "quit" => Some(MenuAction::Quit),
-                _ => None,
-            };
-            if let (Some(a), Some(tx)) = (a, MENU_TX.lock().unwrap().as_mut()) {
-                let _ = tx.try_send(a);
-            }
-        }));
-
-        Ok(Self {
-            tray,
-            icon_state: Cell::new(icon_state),
-            status,
-            stats,
-            config,
-            start_stop,
-            autostart,
-            auto_connect,
-            _delegate: delegate,
-        })
-    }
-
-    fn set_icon_state(&self, state: TrayIconState) -> Result<()> {
-        if self.icon_state.get() == state {
-            return Ok(());
-        }
-        self.tray
-            .set_icon_with_as_template(Some(icons::tray_icon(state)?), true)?;
-        self.icon_state.set(state);
-        Ok(())
-    }
 }
 
 struct ProxyBear {
@@ -295,16 +73,7 @@ impl ProxyBear {
             let _: bool = msg_send![ns_app, setActivationPolicy: 1i64];
         }
         let paths = app_paths().expect("app paths");
-        // Init logging before anything that might log
-        let _ = fs::create_dir_all(&paths.config_dir);
-        let log_writer = RotatingWriter::new(
-            paths.config_dir.join("proxybear.log"),
-            1024 * 1024, // 1 MiB
-        )
-        .expect("open log file");
-        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
-            .target(env_logger::Target::Pipe(Box::new(log_writer)))
-            .init();
+        logging::init(&paths.config_dir).expect("open log file");
         log::info!("ProxyBear starting");
         let config = load_config(&paths).expect("load config");
         let stats = Arc::new(ProxyStats::default());
@@ -313,16 +82,7 @@ impl ProxyBear {
         let tray = TrayMenu::new(&paths, config.auto_connect).expect("tray menu");
         let config_path = paths.config_path.display().to_string();
         let auto_connect = config.auto_connect;
-        let form = SettingsForm {
-            server: config.server.clone(),
-            username: config.username.clone(),
-            port: config.port.to_string(),
-            auth_method: config.auth_method.clone(),
-            key_path: config.key_path.clone(),
-            key_password: config.key_password.clone(),
-            ssh_password: config.ssh_password.clone(),
-            local_addr: config.local_addr.clone(),
-        };
+        let form = SettingsForm::from_config(&config);
         let startup_task = if auto_connect {
             iced::Task::done(Message::AutoConnect)
         } else {
@@ -392,7 +152,7 @@ impl ProxyBear {
 
     fn subscription(&self) -> iced::Subscription<Message> {
         let mut subs: Vec<iced::Subscription<Message>> = vec![
-            menu_sub(),
+            tray::subscription().map(Message::MenuAction),
             proxy_sub(),
             iced::window::events().map(|(id, ev)| Message::Window(id, ev)),
         ];
@@ -404,21 +164,11 @@ impl ProxyBear {
 }
 
 #[derive(Hash)]
-struct MenuSubId;
-#[derive(Hash)]
 struct ProxySubId;
-
-fn menu_sub() -> iced::Subscription<Message> {
-    iced::Subscription::run_with(MenuSubId, |_: &MenuSubId| {
-        let (tx, rx) = mpsc::channel::<MenuAction>(32);
-        *MENU_TX.lock().unwrap() = Some(tx);
-        rx.map(Message::MenuAction)
-    })
-}
 
 fn proxy_sub() -> iced::Subscription<Message> {
     iced::Subscription::run_with(ProxySubId, |_: &ProxySubId| {
-        let (tx, rx) = mpsc::channel::<Option<String>>(32);
+        let (tx, rx) = mpsc::channel::<Option<String>>(PROXY_CHANNEL_SIZE);
         *PROXY_TX.lock().unwrap() = Some(tx);
         rx.map(Message::ProxyDone)
     })
@@ -445,16 +195,14 @@ impl ProxyBear {
                 config.autostart = !config.autostart;
                 self.tray.autostart.set_checked(config.autostart);
                 let _ = config::set_autostart(&self.paths, config.autostart);
-                let _ = save_config(&self.paths, &config);
-                *self.config.lock().unwrap() = config;
+                self.save_config_state(config);
                 iced::Task::none()
             }
             MenuAction::ToggleAutoConnect => {
                 let mut config = self.config.lock().unwrap().clone();
                 config.auto_connect = !config.auto_connect;
                 self.tray.auto_connect.set_checked(config.auto_connect);
-                let _ = save_config(&self.paths, &config);
-                *self.config.lock().unwrap() = config;
+                self.save_config_state(config);
                 iced::Task::none()
             }
             MenuAction::Quit => {
@@ -499,7 +247,7 @@ impl ProxyBear {
             }
         } else {
             let (id, open_task) = iced::window::open(iced::window::Settings {
-                size: iced::Size::new(440.0, 700.0),
+                size: iced::Size::new(SETTINGS_WINDOW_WIDTH, SETTINGS_WINDOW_HEIGHT),
                 ..Default::default()
             });
             self.settings_window = Some(id);
@@ -523,11 +271,7 @@ impl ProxyBear {
         );
         self.update_icon();
 
-        #[cfg(target_os = "macos")]
-        let visible = MENU_IS_OPEN.with(|c| c.get());
-        #[cfg(not(target_os = "macos"))]
-        let visible = false;
-        if !visible {
+        if !tray::is_menu_open() {
             return;
         }
 
@@ -538,10 +282,7 @@ impl ProxyBear {
             Some(err) => format!("{} | Status: {}", err, stats.status),
             None => format!("Status: {}", stats.status),
         };
-        if s != self.last_status {
-            self.tray.status.set_text(&s);
-            self.last_status = s;
-        }
+        set_menu_text(&self.tray.status, &mut self.last_status, s);
         let l = format!(
             "{} SSH ({} total), up {}, down {}",
             stats.ssh_current,
@@ -549,20 +290,14 @@ impl ProxyBear {
             format_bytes(stats.bytes_up),
             format_bytes(stats.bytes_down)
         );
-        if l != self.last_stats {
-            self.tray.stats.set_text(&l);
-            self.last_stats = l;
-        }
-        let c = config_summary(&config);
-        if c != self.last_config {
-            self.tray.config.set_text(&c);
-            self.last_config = c;
-        }
+        set_menu_text(&self.tray.stats, &mut self.last_stats, l);
+        set_menu_text(
+            &self.tray.config,
+            &mut self.last_config,
+            config_summary(&config),
+        );
         let ss = if running { "Stop Proxy" } else { "Start Proxy" };
-        if ss != self.last_start_stop {
-            self.tray.start_stop.set_text(ss);
-            self.last_start_stop = ss.to_string();
-        }
+        set_menu_text(&self.tray.start_stop, &mut self.last_start_stop, ss);
         let au = is_autostart_enabled(&self.paths);
         if au != self.last_autostart {
             self.tray.autostart.set_checked(au);
@@ -629,19 +364,12 @@ impl ProxyBear {
 
     fn save_settings(&self) {
         let mut config = self.config.lock().unwrap().clone();
-        let f = &self.form;
-        config.server = f.server.trim().to_string();
-        config.username = f.username.trim().to_string();
-        config.port = f.port.parse().unwrap_or(22);
-        config.auth_method = if f.auth_method == "password" {
-            "password".into()
-        } else {
-            "key".into()
-        };
-        config.key_path = f.key_path.trim().to_string();
-        config.key_password = f.key_password.clone();
-        config.ssh_password = f.ssh_password.clone();
-        config.local_addr = f.local_addr.trim().to_string();
+        self.form.apply_to_config(&mut config);
+        let _ = save_config(&self.paths, &config);
+        *self.config.lock().unwrap() = config;
+    }
+
+    fn save_config_state(&self, config: AppConfig) {
         let _ = save_config(&self.paths, &config);
         *self.config.lock().unwrap() = config;
     }
@@ -666,6 +394,14 @@ fn config_summary(config: &AppConfig) -> String {
             "{}@{}:{} -> {}",
             config.username, config.server, config.port, config.local_addr
         )
+    }
+}
+
+fn set_menu_text(item: &MenuItem, cached: &mut String, next: impl Into<String>) {
+    let next = next.into();
+    if next != *cached {
+        item.set_text(&next);
+        *cached = next;
     }
 }
 

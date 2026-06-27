@@ -1,26 +1,80 @@
 use iced::widget::{Space, button, column, container, row, rule, text, text_input};
 use iced::{Alignment, Element, Length};
 
-use crate::{SettingsField, SettingsForm};
+use crate::config::AppConfig;
+
+const INPUT_PADDING: u16 = 6;
+const LABEL_SIZE: u32 = 12;
+const SECTION_SIZE: u32 = 11;
+const FORM_WIDTH: f32 = 440.0;
+
+#[derive(Debug, Clone)]
+pub enum SettingsField {
+    Server(String),
+    Username(String),
+    Port(String),
+    AuthMethod(String),
+    KeyPath(String),
+    KeyPassword(String),
+    SshPassword(String),
+    LocalAddr(String),
+    Save,
+    SaveAndStart,
+    Stop,
+    ChooseKey,
+}
+
+#[derive(Debug, Clone)]
+pub struct SettingsForm {
+    pub server: String,
+    pub username: String,
+    pub port: String,
+    pub auth_method: String,
+    pub key_path: String,
+    pub key_password: String,
+    pub ssh_password: String,
+    pub local_addr: String,
+}
+
+impl SettingsForm {
+    pub fn from_config(config: &AppConfig) -> Self {
+        Self {
+            server: config.server.clone(),
+            username: config.username.clone(),
+            port: config.port.to_string(),
+            auth_method: config.auth_method.clone(),
+            key_path: config.key_path.clone(),
+            key_password: config.key_password.clone(),
+            ssh_password: config.ssh_password.clone(),
+            local_addr: config.local_addr.clone(),
+        }
+    }
+
+    pub fn apply_to_config(&self, config: &mut AppConfig) {
+        config.server = self.server.trim().to_string();
+        config.username = self.username.trim().to_string();
+        config.port = self.port.parse().unwrap_or(22);
+        config.auth_method = if self.auth_method == "password" {
+            "password".into()
+        } else {
+            "key".into()
+        };
+        config.key_path = self.key_path.trim().to_string();
+        config.key_password.clone_from(&self.key_password);
+        config.ssh_password.clone_from(&self.ssh_password);
+        config.local_addr = self.local_addr.trim().to_string();
+    }
+}
 
 pub fn view<'a>(
     form: &'a SettingsForm,
     stats_text: &'a str,
     config_path: &'a str,
 ) -> Element<'a, SettingsField> {
-    let server_input = text_input("host.example.com", &form.server)
-        .on_input(SettingsField::Server)
-        .padding(6);
-    let user_input = text_input("username", &form.username)
-        .on_input(SettingsField::Username)
-        .padding(6);
-    let port_input = text_input("22", &form.port)
-        .on_input(SettingsField::Port)
-        .padding(6)
-        .width(88);
-    let local_input = text_input("127.0.0.1:1080", &form.local_addr)
-        .on_input(SettingsField::LocalAddr)
-        .padding(6);
+    let server_input = input("host.example.com", &form.server, SettingsField::Server);
+    let user_input = input("username", &form.username, SettingsField::Username);
+    let port_input = input("22", &form.port, SettingsField::Port).width(88);
+    let local_input = input("127.0.0.1:1080", &form.local_addr, SettingsField::LocalAddr);
 
     let is_key = form.auth_method != "password";
     let method_row = row![
@@ -32,31 +86,37 @@ pub fn view<'a>(
             })
             .on_press(SettingsField::AuthMethod("key".into())),
         button("Password")
-            .style(if !is_key {
-                button::primary
-            } else {
+            .style(if is_key {
                 button::secondary
+            } else {
+                button::primary
             })
             .on_press(SettingsField::AuthMethod("password".into())),
     ]
     .spacing(0);
 
     let auth_fields: Element<'a, SettingsField> = if form.auth_method == "password" {
-        let pw = text_input("SSH password", &form.ssh_password)
-            .on_input(SettingsField::SshPassword)
-            .secure(true)
-            .padding(6);
-        column![text("Password").size(12), pw].spacing(2).into()
+        let password_input = input(
+            "SSH password",
+            &form.ssh_password,
+            SettingsField::SshPassword,
+        )
+        .secure(true);
+        column![label("Password"), password_input].spacing(2).into()
     } else {
-        let key_input = text_input("/Users/me/.ssh/id_ed25519", &form.key_path)
-            .on_input(SettingsField::KeyPath)
-            .padding(6);
-        let key_pw = text_input("leave empty if none", &form.key_password)
-            .on_input(SettingsField::KeyPassword)
-            .secure(true)
-            .padding(6);
+        let key_input = input(
+            "/Users/me/.ssh/id_ed25519",
+            &form.key_path,
+            SettingsField::KeyPath,
+        );
+        let key_password_input = input(
+            "leave empty if none",
+            &form.key_password,
+            SettingsField::KeyPassword,
+        )
+        .secure(true);
         column![
-            text("Private key").size(12),
+            label("Private key"),
             row![
                 column![key_input].width(Length::Fill),
                 Space::new().width(8),
@@ -64,8 +124,8 @@ pub fn view<'a>(
             ]
             .align_y(Alignment::End),
             Space::new().height(6),
-            text("Key password").size(12),
-            key_pw,
+            label("Key password"),
+            key_password_input,
         ]
         .spacing(2)
         .into()
@@ -76,28 +136,24 @@ pub fn view<'a>(
             text("ProxyBear").size(20),
             text(stats_text).size(11),
             rule::horizontal(1),
-            // ── Server ──
-            text("SERVER").size(11),
-            column![text("Host").size(12), server_input].spacing(2),
+            section("SERVER"),
+            column![label("Host"), server_input].spacing(2),
             row![
-                column![text("Username").size(12), user_input].width(Length::Fill),
+                column![label("Username"), user_input].width(Length::Fill),
                 Space::new().width(10),
-                column![text("Port").size(12), port_input],
+                column![label("Port"), port_input],
             ],
             Space::new().height(4),
             rule::horizontal(1),
-            // ── Authentication ──
-            text("AUTHENTICATION").size(11),
+            section("AUTHENTICATION"),
             method_row,
             auth_fields,
             Space::new().height(4),
             rule::horizontal(1),
-            // ── Local ──
-            text("LOCAL").size(11),
-            column![text("SOCKS bind address").size(12), local_input].spacing(2),
+            section("LOCAL"),
+            column![label("SOCKS bind address"), local_input].spacing(2),
             Space::new().height(4),
             rule::horizontal(1),
-            // ── Actions ──
             row![
                 button("Save").on_press(SettingsField::Save),
                 button("Save and Start")
@@ -106,12 +162,29 @@ pub fn view<'a>(
                 button("Stop").on_press(SettingsField::Stop),
             ]
             .spacing(8),
-            // Config path
             text(config_path).size(10),
         ]
         .spacing(10),
     )
     .padding(20)
-    .width(440)
+    .width(FORM_WIDTH)
     .into()
+}
+
+fn input<'a>(
+    placeholder: &'a str,
+    value: &'a str,
+    on_input: impl Fn(String) -> SettingsField + 'a,
+) -> iced::widget::TextInput<'a, SettingsField> {
+    text_input(placeholder, value)
+        .on_input(on_input)
+        .padding(INPUT_PADDING)
+}
+
+fn label(value: &str) -> iced::widget::Text<'_> {
+    text(value).size(LABEL_SIZE)
+}
+
+fn section(value: &str) -> iced::widget::Text<'_> {
+    text(value).size(SECTION_SIZE)
 }

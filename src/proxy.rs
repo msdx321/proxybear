@@ -314,13 +314,12 @@ impl client::Handler for Client {
     ) -> Result<bool, Self::Error> {
         let fingerprint = server_public_key.fingerprint(HashAlg::Sha256).to_string();
         let mut config = self.config.lock().unwrap();
-        match &config.host_fingerprint {
-            Some(expected) => Ok(expected == &fingerprint),
-            None => {
-                config.host_fingerprint = Some(fingerprint);
-                save_config(&self.paths, &config)?;
-                Ok(true)
-            }
+        if let Some(expected) = &config.host_fingerprint {
+            Ok(expected == &fingerprint)
+        } else {
+            config.host_fingerprint = Some(fingerprint);
+            save_config(&self.paths, &config)?;
+            Ok(true)
         }
     }
 }
@@ -427,7 +426,6 @@ async fn pump(
                         }
                         break;
                     }
-                    Some(ChannelMsg::WindowAdjusted { .. }) => {}
                     Some(_) => {}
                 }
             }

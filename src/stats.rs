@@ -42,7 +42,11 @@ impl ProxyStats {
     }
 
     pub fn ssh_disconnected(&self) {
-        self.ssh_current.fetch_sub(1, Ordering::Relaxed);
+        let _ = self
+            .ssh_current
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                (current > 0).then_some(current - 1)
+            });
     }
 
     pub fn add_up(&self, bytes: usize) {
