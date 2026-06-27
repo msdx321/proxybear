@@ -15,7 +15,7 @@ objc2-foundation = "0.3.2"
 russh = "0.61.2"
 serde = { version = "1.0", features = ["derive"] }
 tokio = { version = "1.52", features = ["io-util", "macros", "net", "rt-multi-thread", "sync"] }
-toml = "0.9"
+toml = "1.0"
 tray-icon = { version = "0.24.1", default-features = false }
 
 [build-dependencies]
