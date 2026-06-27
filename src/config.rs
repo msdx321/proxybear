@@ -24,6 +24,7 @@ pub struct AppConfig {
     pub key_path: String,
     pub local_addr: String,
     pub autostart: bool,
+    pub auto_connect: bool,
     pub host_fingerprint: Option<String>,
 }
 
@@ -36,6 +37,7 @@ impl Default for AppConfig {
             key_path: String::new(),
             local_addr: "127.0.0.1:1080".to_string(),
             autostart: false,
+            auto_connect: false,
             host_fingerprint: None,
         }
     }

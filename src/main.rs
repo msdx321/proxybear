@@ -29,12 +29,12 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject};
 
 #[derive(Debug, Clone)]
-enum MenuAction { StartStop, Settings, ToggleAutostart, Quit, MenuOpened }
+enum MenuAction { StartStop, Settings, ToggleAutostart, ToggleAutoConnect, Quit, MenuOpened }
 
 #[derive(Debug, Clone)]
 pub enum SettingsField {
     Server(String), Username(String), Port(String), KeyPath(String),
-    LocalAddr(String), Autostart(bool),
+    LocalAddr(String), Autostart(bool), AutoConnect(bool),
     Save, SaveAndStart, Stop, ChooseKey,
 }
 
@@ -42,11 +42,13 @@ pub enum SettingsField {
 pub struct SettingsForm {
     pub server: String, pub username: String, pub port: String,
     pub key_path: String, pub local_addr: String, pub autostart: bool,
+    pub auto_connect: bool,
 }
 
 #[derive(Debug, Clone)]
 enum Message {
     Field(SettingsField), MenuAction(MenuAction),
+    AutoConnect,
     ProxyDone(Option<String>), Tick,
     Window(iced::window::Id, iced::window::Event),
 }
@@ -93,10 +95,11 @@ struct TrayMenu {
     icon_state: Cell<TrayIconState>,
     status: MenuItem, stats: MenuItem, config: MenuItem,
     start_stop: MenuItem, autostart: CheckMenuItem,
+    auto_connect: CheckMenuItem,
 }
 
 impl TrayMenu {
-    fn new(paths: &AppPaths) -> Result<Self> {
+    fn new(paths: &AppPaths, auto_connect: bool) -> Result<Self> {
         let menu = Menu::new();
         let status   = MenuItem::with_id("status", "Status: Stopped", false, None);
         let stats    = MenuItem::with_id("stats", "0 connections", false, None);
@@ -104,9 +107,10 @@ impl TrayMenu {
         let start_stop = MenuItem::with_id("start_stop", "Start Proxy", true, None);
         let settings = MenuItem::with_id("settings", "Settings\u{2026}", true, None);
         let autostart = CheckMenuItem::with_id("autostart", "Launch at Login", true, is_autostart_enabled(paths), None);
+        let auto_connect = CheckMenuItem::with_id("auto_connect", "Auto-Connect", true, auto_connect, None);
         let quit     = MenuItem::with_id("quit", "Quit", true, None);
         let sep = PredefinedMenuItem::separator();
-        menu.append_items(&[&status, &stats, &config, &sep, &start_stop, &settings, &autostart, &sep, &quit])?;
+        menu.append_items(&[&status, &stats, &config, &sep, &start_stop, &settings, &autostart, &auto_connect, &sep, &quit])?;
 
         let icon_state = TrayIconState::Unhappy;
         let tray = TrayIconBuilder::new()
@@ -127,8 +131,9 @@ impl TrayMenu {
             let a = match event.id.as_ref() {
                 "start_stop" => Some(MenuAction::StartStop),
                 "settings"   => Some(MenuAction::Settings),
-                "autostart"  => Some(MenuAction::ToggleAutostart),
-                "quit"       => Some(MenuAction::Quit),
+                "autostart"    => Some(MenuAction::ToggleAutostart),
+                "auto_connect" => Some(MenuAction::ToggleAutoConnect),
+                "quit"         => Some(MenuAction::Quit),
                 _ => None,
             };
             if let (Some(a), Some(tx)) = (a, MENU_TX.lock().unwrap().as_mut()) {
@@ -136,7 +141,7 @@ impl TrayMenu {
             }
         }));
 
-        Ok(Self { tray, icon_state: Cell::new(icon_state), status, stats, config, start_stop, autostart, _delegate: delegate })
+        Ok(Self { tray, icon_state: Cell::new(icon_state), status, stats, config, start_stop, autostart, auto_connect, _delegate: delegate })
     }
 
     fn set_icon_state(&self, state: TrayIconState) -> Result<()> {
@@ -158,7 +163,7 @@ struct ProxyBear {
     stats_text: String, config_path: String,
     settings_open: bool, settings_window: Option<iced::window::Id>,
     last_status: String, last_stats: String, last_config: String, last_start_stop: String,
-    last_autostart: bool,
+    last_autostart: bool, last_auto_connect: bool,
 }
 
 impl ProxyBear {
@@ -173,12 +178,19 @@ impl ProxyBear {
         let stats = Arc::new(ProxyStats::default());
         stats.set_status("Stopped");
         let runtime = Runtime::new().expect("tokio runtime");
-        let tray = TrayMenu::new(&paths).expect("tray menu");
+        let tray = TrayMenu::new(&paths, config.auto_connect).expect("tray menu");
         let config_path = paths.config_path.display().to_string();
+        let auto_connect = config.auto_connect;
         let form = SettingsForm {
             server: config.server.clone(), username: config.username.clone(),
             port: config.port.to_string(), key_path: config.key_path.clone(),
             local_addr: config.local_addr.clone(), autostart: config.autostart,
+            auto_connect: config.auto_connect,
+        };
+        let startup_task = if auto_connect {
+            iced::Task::done(Message::AutoConnect)
+        } else {
+            iced::Task::none()
         };
         (Self {
             paths, config: Arc::new(Mutex::new(config)), stats, runtime,
@@ -186,13 +198,14 @@ impl ProxyBear {
             settings_open: false, settings_window: None,
             last_status: String::new(), last_stats: String::new(),
             last_config: String::new(), last_start_stop: String::new(),
-            last_autostart: false,
-        }, iced::Task::none())
+            last_autostart: false, last_auto_connect: false,
+        }, startup_task)
     }
 
     fn update(&mut self, msg: Message) -> iced::Task<Message> {
         match msg {
             Message::Field(f) => self.handle_field(f),
+            Message::AutoConnect => self.start_proxy(),
             Message::MenuAction(a) => self.handle_menu(a),
             Message::ProxyDone(err) => {
                 if self.proxy.as_ref().is_some_and(|p| p.task.is_finished()) { self.proxy = None; }
@@ -274,6 +287,15 @@ impl ProxyBear {
                 *self.config.lock().unwrap() = config;
                 iced::Task::none()
             }
+            MenuAction::ToggleAutoConnect => {
+                let mut config = self.config.lock().unwrap().clone();
+                config.auto_connect = !config.auto_connect;
+                self.form.auto_connect = config.auto_connect;
+                self.tray.auto_connect.set_checked(config.auto_connect);
+                let _ = save_config(&self.paths, &config);
+                *self.config.lock().unwrap() = config;
+                iced::Task::none()
+            }
             MenuAction::Quit => { self.stop_proxy(); std::process::exit(0); }
         }
     }
@@ -286,6 +308,7 @@ impl ProxyBear {
             SettingsField::KeyPath(v) => self.form.key_path = v,
             SettingsField::LocalAddr(v) => self.form.local_addr = v,
             SettingsField::Autostart(v) => self.form.autostart = v,
+            SettingsField::AutoConnect(v) => self.form.auto_connect = v,
             SettingsField::Save => { self.save_settings(); }
             SettingsField::SaveAndStart => { self.save_settings(); return self.start_proxy(); }
             SettingsField::Stop => { self.stop_proxy(); }
@@ -341,6 +364,8 @@ impl ProxyBear {
         if ss != self.last_start_stop { self.tray.start_stop.set_text(ss); self.last_start_stop = ss.to_string(); }
         let au = is_autostart_enabled(&self.paths);
         if au != self.last_autostart { self.tray.autostart.set_checked(au); self.last_autostart = au; }
+        let ac = self.config.lock().unwrap().auto_connect;
+        if ac != self.last_auto_connect { self.tray.auto_connect.set_checked(ac); self.last_auto_connect = ac; }
     }
 
     fn update_icon(&self) {
@@ -389,6 +414,7 @@ impl ProxyBear {
         config.key_path = f.key_path.trim().to_string();
         config.local_addr = f.local_addr.trim().to_string();
         config.autostart = f.autostart;
+        config.auto_connect = f.auto_connect;
         let _ = config::set_autostart(&self.paths, config.autostart);
         let _ = save_config(&self.paths, &config);
         *self.config.lock().unwrap() = config;

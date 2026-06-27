@@ -41,6 +41,8 @@ pub fn view<'a>(form: &'a SettingsForm, stats_text: &'a str, config_path: &'a st
             column![text("SOCKS bind").size(12), local_input].spacing(2),
             // Autostart
             toggler(form.autostart).on_toggle(SettingsField::Autostart).label("Launch at login"),
+            // Auto-Connect
+            toggler(form.auto_connect).on_toggle(SettingsField::AutoConnect).label("Auto-Connect on open"),
             // Buttons
             row![
                 button("Save").on_press(SettingsField::Save),
