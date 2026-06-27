@@ -23,8 +23,20 @@ jobs:
       - name: Build and bundle
         run: cargo bundle --release
 
-      - name: Package .app as zip
+      - name: Ad-hoc code sign and repackage
         run: |
+          APP="target/release/bundle/osx/ProxyBear.app"
+          # Strip linker signature (does not cover bundle resources)
+          codesign --remove-signature "$APP/Contents/MacOS/proxybear"
+          # Re-sign entire bundle with ad-hoc identity
+          codesign --force --deep --sign - "$APP"
+          # Recreate DMG from re-signed .app
+          rm -f target/release/bundle/dmg/ProxyBear.dmg
+          mkdir -p /tmp/dmg_staging
+          cp -R "$APP" /tmp/dmg_staging/
+          hdiutil create -volname ProxyBear -srcfolder /tmp/dmg_staging -ov -format UDZO target/release/bundle/dmg/ProxyBear.dmg
+          rm -rf /tmp/dmg_staging
+          # Zip the re-signed .app
           cd target/release/bundle/osx
           zip -r ../ProxyBear.app.zip ProxyBear.app
 
