@@ -5,6 +5,7 @@ mod settings;
 mod stats;
 
 use std::cell::Cell;
+use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -239,6 +240,17 @@ impl ProxyBear {
             let _: bool = msg_send![ns_app, setActivationPolicy: 1i64];
         }
         let paths = app_paths().expect("app paths");
+        // Init logging before anything that might log
+        let _ = fs::create_dir_all(&paths.config_dir);
+        let log_file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(paths.config_dir.join("proxybear.log"))
+            .expect("open log file");
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+            .target(env_logger::Target::Pipe(Box::new(log_file)))
+            .init();
+        log::info!("ProxyBear starting");
         let config = load_config(&paths).expect("load config");
         let stats = Arc::new(ProxyStats::default());
         stats.set_status("Stopped");
@@ -470,7 +482,10 @@ impl ProxyBear {
         let config = self.config.lock().unwrap().clone();
         let running = self.proxy.is_some();
 
-        let s = format!("Status: {}", stats.status);
+        let s = match &stats.last_error {
+            Some(err) => format!("{} | Status: {}", err, stats.status),
+            None => format!("Status: {}", stats.status),
+        };
         if s != self.last_status {
             self.tray.status.set_text(&s);
             self.last_status = s;

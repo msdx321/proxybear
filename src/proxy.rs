@@ -108,6 +108,13 @@ async fn connect_ssh(
     paths: AppPaths,
 ) -> Result<client::Handle<Client>> {
     let snapshot = config.lock().unwrap().clone();
+    log::info!(
+        "Connecting to {}@{}:{} (auth={})",
+        snapshot.username,
+        snapshot.server,
+        snapshot.port,
+        snapshot.auth_method,
+    );
     let ssh_config = Arc::new(client::Config {
         nodelay: true,
         ..Default::default()
@@ -122,6 +129,7 @@ async fn connect_ssh(
     .with_context(|| format!("failed to connect SSH server {}", snapshot.server))?;
 
     if snapshot.auth_method == "password" {
+        log::info!("Authenticating with password");
         let auth_result = session
             .authenticate_password(snapshot.username, snapshot.ssh_password)
             .await
@@ -130,6 +138,7 @@ async fn connect_ssh(
             bail!("SSH password authentication was rejected");
         }
     } else {
+        log::info!("Authenticating with public key: {}", snapshot.key_path);
         let passphrase = if snapshot.key_password.is_empty() {
             None
         } else {
@@ -152,6 +161,7 @@ async fn connect_ssh(
         }
     }
 
+    log::info!("SSH authenticated successfully");
     Ok(session)
 }
 
