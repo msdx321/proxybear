@@ -470,6 +470,7 @@ impl ProxyBear {
             format_bytes(stats.bytes_down)
         );
         self.config_path = self.paths.config_path.display().to_string();
+        self.update_icon();
 
         #[cfg(target_os = "macos")]
         let visible = MENU_IS_OPEN.with(|c| c.get());
@@ -524,7 +525,9 @@ impl ProxyBear {
     }
 
     fn update_icon(&self) {
-        let _ = self.tray.set_icon_state(if self.proxy.is_some() {
+        let running = self.proxy.is_some();
+        let clean = self.stats.snapshot().last_error.is_none();
+        let _ = self.tray.set_icon_state(if running && clean {
             TrayIconState::Happy
         } else {
             TrayIconState::Unhappy

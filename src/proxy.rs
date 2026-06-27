@@ -52,6 +52,8 @@ pub async fn run_proxy(
                     stats.connection_opened();
                     if let Err(error) = handle_client(stream, peer_addr, config, paths, Arc::clone(&stats)).await {
                         stats.set_error(error.to_string());
+                    } else {
+                        stats.clear_error();
                     }
                     stats.connection_closed();
                 });
