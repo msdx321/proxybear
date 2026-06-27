@@ -21,12 +21,17 @@ pub struct AppConfig {
     pub server: String,
     pub username: String,
     pub port: u16,
+    #[serde(default)]
     pub auth_method: String,
     pub key_path: String,
+    #[serde(default)]
     pub key_password: String,
+    #[serde(default)]
     pub ssh_password: String,
     pub local_addr: String,
+    #[serde(default)]
     pub autostart: bool,
+    #[serde(default)]
     pub auto_connect: bool,
     pub host_fingerprint: Option<String>,
 }

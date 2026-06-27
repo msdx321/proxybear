@@ -240,7 +240,7 @@ impl ProxyBear {
         unsafe {
             let ns_app: *mut objc2::runtime::AnyObject =
                 msg_send![class!(NSApplication), sharedApplication];
-            let _: () = msg_send![ns_app, setActivationPolicy: 1i32];
+            let _: bool = msg_send![ns_app, setActivationPolicy: 1i64];
         }
         let paths = app_paths().expect("app paths");
         let config = load_config(&paths).expect("load config");
