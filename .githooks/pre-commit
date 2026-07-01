@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+
+before="$(git diff --binary --no-ext-diff | git hash-object --stdin)"
+
+cargo fmt --all
+
+after="$(git diff --binary --no-ext-diff | git hash-object --stdin)"
+
+if [ "$before" != "$after" ]; then
+  echo "cargo fmt updated files. Review and stage the formatted changes, then commit again." >&2
+  exit 1
+fi

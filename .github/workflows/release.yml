@@ -5,45 +5,110 @@ on:
     tags:
       - "v*"
 
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  build:
-    name: Build and release
+  verify:
+    name: Verify release
     runs-on: macos-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: macos-rust
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Run tests
+        run: cargo test --all-targets --all-features
+
+      - name: Build release binary
+        run: cargo build --release --all-features
+
+  package:
+    name: Package and release
+    needs: verify
+    runs-on: macos-latest
+    timeout-minutes: 45
     permissions:
       contents: write
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v7
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: macos-rust
 
       - name: Install cargo-bundle
-        run: cargo install cargo-bundle
+        run: |
+          if ! command -v cargo-bundle >/dev/null 2>&1; then
+            cargo install cargo-bundle --locked
+          fi
 
-      - name: Build and bundle
-        run: cargo bundle --release
+      - name: Build app bundle
+        run: |
+          cargo bundle --release --format osx
+          APP="target/release/bundle/osx/ProxyBear.app"
+          test -d "$APP"
+          plutil -lint "$APP/Contents/Info.plist"
 
       - name: Ad-hoc code sign and repackage
         run: |
           APP="target/release/bundle/osx/ProxyBear.app"
-          # Strip linker signature (does not cover bundle resources)
-          codesign --remove-signature "$APP/Contents/MacOS/proxybear"
-          # Re-sign entire bundle with ad-hoc identity
+          codesign --remove-signature "$APP/Contents/MacOS/proxybear" 2>/dev/null || true
           codesign --force --deep --sign - "$APP"
-          # Recreate DMG from re-signed .app
-          rm -f target/release/bundle/dmg/ProxyBear.dmg
-          mkdir -p /tmp/dmg_staging
-          cp -R "$APP" /tmp/dmg_staging/
-          hdiutil create -volname ProxyBear -srcfolder /tmp/dmg_staging -ov -format UDZO target/release/bundle/dmg/ProxyBear.dmg
-          rm -rf /tmp/dmg_staging
-          # Zip the re-signed .app
-          cd target/release/bundle/osx
-          zip -r ../ProxyBear.app.zip ProxyBear.app
+          rm -rf target/release/bundle/dmg
+          mkdir -p target/release/bundle/dmg
+          DMG_STAGING="$(mktemp -d)"
+          trap 'rm -rf "$DMG_STAGING"' EXIT
+          cp -R "$APP" "$DMG_STAGING/"
+          hdiutil create -volname ProxyBear -srcfolder "$DMG_STAGING" -ov -format UDZO target/release/bundle/dmg/ProxyBear.dmg
+          ditto -c -k --keepParent "$APP" target/release/bundle/ProxyBear.app.zip
+          test -f target/release/bundle/ProxyBear.app.zip
+          test -f target/release/bundle/dmg/ProxyBear.dmg
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: ProxyBear-release-artifacts
+          path: |
+            target/release/bundle/ProxyBear.app.zip
+            target/release/bundle/dmg/ProxyBear.dmg
+          if-no-files-found: error
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             target/release/bundle/ProxyBear.app.zip
             target/release/bundle/dmg/ProxyBear.dmg
           generate_release_notes: true
+          fail_on_unmatched_files: true
