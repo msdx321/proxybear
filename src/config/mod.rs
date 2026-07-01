@@ -1,5 +1,6 @@
 use std::{
     env, fs,
+    net::SocketAddr,
     path::{Path, PathBuf},
 };
 
@@ -14,6 +15,60 @@ pub struct AppPaths {
     pub config_dir: PathBuf,
     pub config_path: PathBuf,
     pub launch_agent_path: PathBuf,
+}
+
+impl AppPaths {
+    pub fn log_path(&self) -> PathBuf {
+        self.config_dir.join("proxybear.log")
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AuthMethod {
+    Key,
+    Password,
+}
+
+impl AuthMethod {
+    pub fn from_config(value: &str) -> Self {
+        match value {
+            "password" => Self::Password,
+            _ => Self::Key,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Key => "key",
+            Self::Password => "password",
+        }
+    }
+
+    fn requires_key(self) -> bool {
+        matches!(self, Self::Key)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ListenConfig {
+    pub local_addr: SocketAddr,
+}
+
+#[derive(Clone, Debug)]
+pub struct SshConnectConfig {
+    pub server: String,
+    pub username: String,
+    pub port: u16,
+    pub auth_method: AuthMethod,
+    pub key_path: String,
+    pub key_password: String,
+    pub ssh_password: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct RuntimeConfig {
+    pub listen: ListenConfig,
+    pub ssh: SshConnectConfig,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -42,7 +97,7 @@ impl Default for AppConfig {
             server: String::new(),
             username: env::var("USER").unwrap_or_default(),
             port: 22,
-            auth_method: "key".into(),
+            auth_method: AuthMethod::Key.as_str().into(),
             key_path: String::new(),
             key_password: String::new(),
             ssh_password: String::new(),
@@ -55,20 +110,50 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
+    pub fn auth_method(&self) -> AuthMethod {
+        AuthMethod::from_config(&self.auth_method)
+    }
+
+    pub fn set_auth_method(&mut self, method: AuthMethod) {
+        self.auth_method = method.as_str().to_string();
+    }
+
     pub fn validate_ready(&self) -> Result<()> {
-        if self.server.trim().is_empty() {
+        self.runtime_config().map(|_| ())
+    }
+
+    pub fn runtime_config(&self) -> Result<RuntimeConfig> {
+        let server = self.server.trim();
+        if server.is_empty() {
             bail!("server is empty");
         }
-        if self.username.trim().is_empty() {
+        let username = self.username.trim();
+        if username.is_empty() {
             bail!("username is empty");
         }
-        if self.auth_method != "password" && self.key_path.trim().is_empty() {
+        let auth_method = self.auth_method();
+        let key_path = self.key_path.trim();
+        if auth_method.requires_key() && key_path.is_empty() {
             bail!("key path is empty");
         }
-        self.local_addr
-            .parse::<std::net::SocketAddr>()
+
+        let local_addr = self
+            .local_addr
+            .trim()
+            .parse::<SocketAddr>()
             .with_context(|| format!("invalid local address {}", self.local_addr))?;
-        Ok(())
+        Ok(RuntimeConfig {
+            listen: ListenConfig { local_addr },
+            ssh: SshConnectConfig {
+                server: server.to_string(),
+                username: username.to_string(),
+                port: self.port,
+                auth_method,
+                key_path: key_path.to_string(),
+                key_password: self.key_password.clone(),
+                ssh_password: self.ssh_password.clone(),
+            },
+        })
     }
 }
 

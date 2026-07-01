@@ -1,5 +1,5 @@
 use std::sync::{
-    Mutex,
+    Mutex, MutexGuard,
     atomic::{AtomicU64, Ordering},
 };
 
@@ -25,15 +25,15 @@ pub struct StatsSnapshot {
 
 impl ProxyStats {
     pub fn set_status(&self, status: impl Into<String>) {
-        *self.status.lock().unwrap() = status.into();
+        *lock(&self.status) = status.into();
     }
 
     pub fn set_error(&self, error: impl Into<String>) {
-        *self.last_error.lock().unwrap() = Some(error.into());
+        *lock(&self.last_error) = Some(error.into());
     }
 
     pub fn clear_error(&self) {
-        *self.last_error.lock().unwrap() = None;
+        *lock(&self.last_error) = None;
     }
 
     pub fn ssh_connected(&self) {
@@ -63,8 +63,14 @@ impl ProxyStats {
             ssh_total: self.ssh_total.load(Ordering::Relaxed),
             bytes_up: self.bytes_up.load(Ordering::Relaxed),
             bytes_down: self.bytes_down.load(Ordering::Relaxed),
-            status: self.status.lock().unwrap().clone(),
-            last_error: self.last_error.lock().unwrap().clone(),
+            status: lock(&self.status).clone(),
+            last_error: lock(&self.last_error).clone(),
         }
     }
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }

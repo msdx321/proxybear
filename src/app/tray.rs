@@ -1,4 +1,7 @@
-use std::{cell::Cell, sync::Mutex};
+use std::{
+    cell::Cell,
+    sync::{Mutex, MutexGuard},
+};
 
 use anyhow::{Context, Result};
 use iced::futures::channel::mpsc;
@@ -7,10 +10,9 @@ use tray_icon::{
     menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem},
 };
 
-use crate::{
-    config::{AppPaths, is_autostart_enabled},
-    icons::{self, TrayIconState},
-};
+use crate::config::{AppPaths, is_autostart_enabled};
+
+use super::icons::{self, TrayIconState};
 
 const MENU_CHANNEL_SIZE: usize = 32;
 
@@ -43,7 +45,7 @@ define_class!(
         #[unsafe(method(menuWillOpen:))]
         fn menu_will_open(&self, _menu: &AnyObject) {
             MENU_IS_OPEN.with(|c| c.set(true));
-            if let Some(tx) = MENU_TX.lock().unwrap().as_mut() {
+            if let Some(tx) = menu_sender().as_mut() {
                 let _ = tx.try_send(MenuAction::MenuOpened);
             }
         }
@@ -63,7 +65,7 @@ struct MenuSubId;
 pub fn subscription() -> iced::Subscription<MenuAction> {
     iced::Subscription::run_with(MenuSubId, |_: &MenuSubId| {
         let (tx, rx) = mpsc::channel::<MenuAction>(MENU_CHANNEL_SIZE);
-        *MENU_TX.lock().unwrap() = Some(tx);
+        *menu_sender() = Some(tx);
         rx
     })
 }
@@ -152,7 +154,7 @@ impl TrayMenu {
                 "quit" => Some(MenuAction::Quit),
                 _ => None,
             };
-            if let (Some(action), Some(tx)) = (action, MENU_TX.lock().unwrap().as_mut()) {
+            if let (Some(action), Some(tx)) = (action, menu_sender().as_mut()) {
                 let _ = tx.try_send(action);
             }
         }));
@@ -180,4 +182,10 @@ impl TrayMenu {
         self.icon_state.set(state);
         Ok(())
     }
+}
+
+fn menu_sender() -> MutexGuard<'static, Option<mpsc::Sender<MenuAction>>> {
+    MENU_TX
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
