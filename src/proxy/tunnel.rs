@@ -9,13 +9,15 @@ use tokio::{
 
 use crate::app::stats::ProxyStats;
 
+const TUNNEL_BUFFER_SIZE: usize = 64 * 1024;
+
 pub async fn pump(
     mut stream: TcpStream,
     channel: &mut russh::Channel<client::Msg>,
     stats: Arc<ProxyStats>,
 ) -> Result<()> {
     let mut stream_closed = false;
-    let mut buf = [0; 16 * 1024];
+    let mut buf = [0; TUNNEL_BUFFER_SIZE];
 
     loop {
         tokio::select! {

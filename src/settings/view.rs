@@ -20,12 +20,14 @@ pub fn view<'a>(
         SettingsTab::Logs => logs::tab(logs),
     };
     let content = match active_tab {
-        SettingsTab::Settings => {
-            column![body, rule::horizontal(1), settings_tab::footer(config_path)]
-                .spacing(12)
-                .height(Length::Fill)
-                .into()
-        }
+        SettingsTab::Settings => column![
+            body,
+            rule::horizontal(1),
+            settings_tab::footer(form, config_path)
+        ]
+        .spacing(12)
+        .height(Length::Fill)
+        .into(),
         SettingsTab::Logs => body,
     };
 

@@ -82,6 +82,9 @@ async fn handle_client(
     session: SharedSession,
     stats: Arc<ProxyStats>,
 ) -> Result<()> {
+    stream
+        .set_nodelay(true)
+        .context("failed to set TCP_NODELAY")?;
     socks::negotiate_no_auth(&mut stream).await?;
     let request = socks::read_request(&mut stream).await?;
 

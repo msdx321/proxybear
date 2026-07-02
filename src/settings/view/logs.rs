@@ -1,8 +1,8 @@
 use iced::widget::text::Wrapping;
-use iced::widget::{Space, column, container, row, scrollable, text};
+use iced::widget::{Space, button, column, container, row, scrollable, text};
 use iced::{Alignment, Element, Font, Length};
 
-use super::super::{LogTail, SettingsField};
+use super::super::{LOG_SCROLL_ID, LogTail, SettingsField};
 
 const SECTION_SIZE: u32 = 13;
 
@@ -36,13 +36,24 @@ pub(super) fn tab<'a>(logs: &'a LogTail) -> Element<'a, SettingsField> {
                 text("proxybear.log").size(11),
             ]
             .align_y(Alignment::Center),
+            row![
+                button("Open").on_press(SettingsField::OpenLog),
+                button("Reveal").on_press(SettingsField::RevealLog),
+                button("Clear").on_press(SettingsField::ClearLog),
+            ]
+            .spacing(8),
             text(logs.path_label()).size(10).wrapping(Wrapping::Word),
             error,
-            container(scrollable(lines).height(Length::Fill))
-                .padding(10)
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .style(container::rounded_box),
+            container(
+                scrollable(lines)
+                    .id(LOG_SCROLL_ID)
+                    .anchor_bottom()
+                    .height(Length::Fill)
+            )
+            .padding(10)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(container::rounded_box),
         ]
         .spacing(8)
         .height(Length::Fill)

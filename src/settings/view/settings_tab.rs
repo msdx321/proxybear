@@ -42,16 +42,41 @@ pub(super) fn body<'a>(form: &'a SettingsForm) -> Element<'a, SettingsField> {
     scrollable(fields).height(Length::Fill).into()
 }
 
-pub(super) fn footer<'a>(config_path: &'a str) -> Element<'a, SettingsField> {
+pub(super) fn footer<'a>(
+    form: &'a SettingsForm,
+    config_path: &'a str,
+) -> Element<'a, SettingsField> {
+    let save = if form.can_save() {
+        button("Save").on_press(SettingsField::Save)
+    } else {
+        button("Save")
+    };
+    let save_and_start = if form.can_start() {
+        button("Save and Start")
+            .on_press(SettingsField::SaveAndStart)
+            .style(button::primary)
+    } else {
+        button("Save and Start").style(button::secondary)
+    };
+    let validation = form
+        .save_error()
+        .map(|error| format!("Save unavailable: {error}"))
+        .or_else(|| {
+            form.start_error()
+                .map(|error| format!("Save and Start unavailable: {error}"))
+        })
+        .map(|error| text(error).size(11).wrapping(Wrapping::Word))
+        .map(Element::from)
+        .unwrap_or_else(|| Space::new().height(0).into());
+
     column![
         row![
-            button("Save").on_press(SettingsField::Save),
-            button("Save and Start")
-                .on_press(SettingsField::SaveAndStart)
-                .style(button::primary),
+            save,
+            save_and_start,
             button("Stop").on_press(SettingsField::Stop),
         ]
         .spacing(8),
+        validation,
         text(config_path).size(10).wrapping(Wrapping::Word),
     ]
     .spacing(8)

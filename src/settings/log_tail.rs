@@ -2,7 +2,7 @@ use std::{
     collections::VecDeque,
     fs,
     io::{self, Read, Seek, SeekFrom},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 const MAX_LOG_LINES: usize = 400;
@@ -29,30 +29,52 @@ impl LogTail {
         }
     }
 
-    pub fn refresh(&mut self) {
+    pub fn refresh(&mut self) -> usize {
         match self.read_new() {
             Ok(0) if self.lines.is_empty() => {
                 self.error = None;
                 self.status = "Log file is empty".into();
+                0
             }
             Ok(0) => {
                 self.error = None;
                 self.status = format!("Live, {} lines", self.lines.len());
+                0
             }
             Ok(added) => {
                 self.error = None;
                 self.status = format!("Live, {} lines, {added} new", self.lines.len());
+                added
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 self.offset = 0;
                 self.error = None;
                 self.status = "No log file yet".into();
+                0
             }
             Err(error) => {
                 self.error = Some(format!("Could not read log: {error}"));
                 self.status = "Log read error".into();
+                0
             }
         }
+    }
+
+    pub fn clear(&mut self) -> io::Result<()> {
+        fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&self.path)?;
+        self.offset = 0;
+        self.lines.clear();
+        self.error = None;
+        self.status = "Log cleared".into();
+        Ok(())
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
     }
 
     pub fn path_label(&self) -> &str {

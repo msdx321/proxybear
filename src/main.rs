@@ -5,6 +5,7 @@ mod proxy;
 mod settings;
 
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -19,7 +20,7 @@ use app::{
     tray::{self, MenuAction, TrayMenu},
 };
 use config::{AppConfig, AppPaths, app_paths, load_config, save_config};
-use settings::{LogTail, SettingsField, SettingsForm, SettingsTab};
+use settings::{LOG_SCROLL_ID, LogTail, SettingsField, SettingsForm, SettingsTab};
 
 const SETTINGS_WINDOW_WIDTH: f32 = 520.0;
 const SETTINGS_WINDOW_HEIGHT: f32 = 640.0;
@@ -111,8 +112,8 @@ impl ProxyBear {
                 iced::Task::none()
             }
             Message::LogTick => {
-                if self.active_tab == SettingsTab::Logs {
-                    self.log_tail.refresh();
+                if self.active_tab == SettingsTab::Logs && self.log_tail.refresh() > 0 {
+                    return iced::widget::operation::snap_to_end(LOG_SCROLL_ID);
                 }
                 iced::Task::none()
             }
@@ -175,15 +176,20 @@ impl ProxyBear {
                 let mut config = self.config_snapshot();
                 config.autostart = !config.autostart;
                 self.tray.autostart.set_checked(config.autostart);
-                let _ = config::set_autostart(&self.paths, config.autostart);
-                self.save_config_state(config);
+                if let Err(error) = config::set_autostart(&self.paths, config.autostart)
+                    .and_then(|()| self.save_config_state(config))
+                {
+                    self.stats.set_error(error.to_string());
+                }
                 iced::Task::none()
             }
             MenuAction::ToggleAutoConnect => {
                 let mut config = self.config_snapshot();
                 config.auto_connect = !config.auto_connect;
                 self.tray.auto_connect.set_checked(config.auto_connect);
-                self.save_config_state(config);
+                if let Err(error) = self.save_config_state(config) {
+                    self.stats.set_error(error.to_string());
+                }
                 iced::Task::none()
             }
             MenuAction::Quit => {
@@ -199,6 +205,7 @@ impl ProxyBear {
                 self.active_tab = tab;
                 if tab == SettingsTab::Logs {
                     self.log_tail.refresh();
+                    return iced::widget::operation::snap_to_end(LOG_SCROLL_ID);
                 }
             }
             SettingsField::Server(v) => self.form.server = v,
@@ -210,18 +217,42 @@ impl ProxyBear {
             SettingsField::SshPassword(v) => self.form.ssh_password = v,
             SettingsField::LocalAddr(v) => self.form.local_addr = v,
             SettingsField::Save => {
-                self.save_settings();
+                if let Err(error) = self.save_settings() {
+                    self.stats.set_error(error.to_string());
+                }
             }
             SettingsField::SaveAndStart => {
-                self.save_settings();
-                return self.start_proxy();
+                return match self.save_settings() {
+                    Ok(()) => self.start_proxy(),
+                    Err(error) => {
+                        self.stats.set_error(error.to_string());
+                        iced::Task::none()
+                    }
+                };
             }
             SettingsField::Stop => {
                 self.stop_proxy();
             }
             SettingsField::ChooseKey => {
-                self.save_settings();
+                if let Err(error) = self.save_settings() {
+                    self.stats.set_error(error.to_string());
+                }
                 self.choose_key();
+            }
+            SettingsField::OpenLog => {
+                self.open_log();
+            }
+            SettingsField::RevealLog => {
+                self.reveal_log();
+            }
+            SettingsField::ClearLog => {
+                if let Err(error) = self.log_tail.clear() {
+                    self.stats
+                        .set_error(format!("failed to clear log: {error}"));
+                } else {
+                    log::info!("Log cleared");
+                    return iced::widget::operation::snap_to_end(LOG_SCROLL_ID);
+                }
             }
         }
         iced::Task::none()
@@ -303,22 +334,20 @@ impl ProxyBear {
         }
     }
 
-    fn save_settings(&self) {
+    fn save_settings(&self) -> Result<()> {
         let mut config = self.config_snapshot();
-        self.form.apply_to_config(&mut config);
-        self.save_config_state(config);
+        self.form.apply_to_config(&mut config)?;
+        self.save_config_state(config)
     }
 
-    fn save_config_state(&self, config: AppConfig) {
-        if let Err(error) = save_config(&self.paths, &config) {
-            self.stats
-                .set_error(format!("failed to save config: {error}"));
-            return;
-        }
+    fn save_config_state(&self, config: AppConfig) -> Result<()> {
+        save_config(&self.paths, &config).context("failed to save config")?;
         *self
             .config
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = config;
+        self.stats.clear_error();
+        Ok(())
     }
 
     fn config_snapshot(&self) -> AppConfig {
@@ -336,6 +365,24 @@ impl ProxyBear {
         }
         if let Ok(Some(path)) = builder.open_single_file().show() {
             self.form.key_path = path.display().to_string();
+        }
+    }
+
+    fn open_log(&mut self) {
+        if let Err(error) = Command::new("open").arg(self.log_tail.path()).spawn() {
+            self.stats
+                .set_error(format!("failed to open log file: {error}"));
+        }
+    }
+
+    fn reveal_log(&mut self) {
+        if let Err(error) = Command::new("open")
+            .arg("-R")
+            .arg(self.log_tail.path())
+            .spawn()
+        {
+            self.stats
+                .set_error(format!("failed to reveal log file: {error}"));
         }
     }
 }
