@@ -2,17 +2,29 @@ use std::{
     fs,
     io::{self, Write},
     path::{Path, PathBuf},
+    sync::{Arc, Mutex},
 };
 
-const LOG_MAX_SIZE: u64 = 1024 * 1024;
-const DEFAULT_LOG_FILTER: &str = "warn,proxybear=info,iced=warn,wgpu=warn,naga=warn";
+use anyhow::Result;
+use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
-pub fn init(config_dir: &Path) -> io::Result<()> {
+const LOG_MAX_SIZE: u64 = 1024 * 1024;
+const DEFAULT_LOG_FILTER: &str = "warn,proxybear=info,russh=warn,iced=warn,wgpu=warn,naga=warn";
+
+pub fn init(config_dir: &Path) -> Result<()> {
     fs::create_dir_all(config_dir)?;
-    let log_writer = RotatingWriter::new(config_dir.join("proxybear.log"), LOG_MAX_SIZE)?;
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(DEFAULT_LOG_FILTER))
-        .target(env_logger::Target::Pipe(Box::new(log_writer)))
-        .init();
+    let log_writer = SharedWriter::new(RotatingWriter::new(
+        config_dir.join("proxybear.log"),
+        LOG_MAX_SIZE,
+    )?);
+    let filter =
+        EnvFilter::try_from_default_env().or_else(|_| EnvFilter::try_new(DEFAULT_LOG_FILTER))?;
+
+    tracing_log::LogTracer::init()?;
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(fmt::layer().with_ansi(false).with_writer(log_writer))
+        .try_init()?;
     Ok(())
 }
 
@@ -23,6 +35,49 @@ struct RotatingWriter {
     path: PathBuf,
     written: u64,
     max_size: u64,
+}
+
+#[derive(Clone)]
+struct SharedWriter {
+    inner: Arc<Mutex<RotatingWriter>>,
+}
+
+impl SharedWriter {
+    fn new(writer: RotatingWriter) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(writer)),
+        }
+    }
+}
+
+impl<'a> fmt::MakeWriter<'a> for SharedWriter {
+    type Writer = SharedWriterGuard;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        SharedWriterGuard {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+}
+
+struct SharedWriterGuard {
+    inner: Arc<Mutex<RotatingWriter>>,
+}
+
+impl Write for SharedWriterGuard {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .flush()
+    }
 }
 
 impl RotatingWriter {

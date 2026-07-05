@@ -36,10 +36,29 @@ pub async fn run_proxy(
 
     let listener = TcpListener::bind(local_addr)
         .await
+        .map_err(|error| {
+            tracing::error!(
+                event = "proxy_bind_failed",
+                local_addr = %local_addr,
+                error = %error,
+                "Failed to bind local proxy listener"
+            );
+            error
+        })
         .with_context(|| format!("failed to bind {local_addr}"))?;
 
+    tracing::info!(event = "proxy_starting", local_addr = %local_addr, "Proxy starting");
     stats.set_status("Connecting to SSH server...");
-    let handle = ssh::connect(Arc::clone(&config), paths.clone()).await?;
+    let handle = ssh::connect(Arc::clone(&config), paths.clone())
+        .await
+        .map_err(|error| {
+            tracing::error!(
+                event = "ssh_connect_failed",
+                error = %error,
+                "Failed to connect SSH session"
+            );
+            error
+        })?;
     let listening_status = format!("Listening on {local_addr}");
     let session = Arc::new(TokioRwLock::new(SessionState::new(
         handle,
@@ -50,6 +69,7 @@ pub async fn run_proxy(
     stats.clear_error();
     stats.set_status(listening_status);
     stats.ssh_connected();
+    tracing::info!(event = "proxy_started", local_addr = %local_addr, "Proxy started");
 
     loop {
         tokio::select! {
@@ -60,6 +80,7 @@ pub async fn run_proxy(
                 }
                 state.disconnect().await;
                 stats.set_status("Stopped");
+                tracing::info!(event = "proxy_stopped", reason = "shutdown", "Proxy stopped");
                 return Ok(());
             }
             accepted = listener.accept() => {
@@ -69,8 +90,6 @@ pub async fn run_proxy(
                 tokio::spawn(async move {
                     if let Err(error) = handle_client(stream, peer_addr, session, Arc::clone(&stats)).await {
                         stats.set_error(error.to_string());
-                    } else {
-                        stats.clear_error();
                     }
                 });
             }
@@ -86,9 +105,39 @@ async fn handle_client(
 ) -> Result<()> {
     stream
         .set_nodelay(true)
+        .map_err(|error| {
+            tracing::debug!(
+                event = "socks_request_failed",
+                peer = %peer_addr,
+                phase = "tcp_setup",
+                error = %error,
+                "Failed to configure local SOCKS connection"
+            );
+            error
+        })
         .context("failed to set TCP_NODELAY")?;
-    socks::negotiate_no_auth(&mut stream).await?;
-    let request = socks::read_request(&mut stream).await?;
+    socks::negotiate_no_auth(&mut stream)
+        .await
+        .map_err(|error| {
+            tracing::debug!(
+                event = "socks_request_failed",
+                peer = %peer_addr,
+                phase = "negotiation",
+                error = %error,
+                "SOCKS negotiation failed"
+            );
+            error
+        })?;
+    let request = socks::read_request(&mut stream).await.map_err(|error| {
+        tracing::debug!(
+            event = "socks_request_failed",
+            peer = %peer_addr,
+            phase = "request",
+            error = %error,
+            "SOCKS request failed"
+        );
+        error
+    })?;
 
     let opened =
         match session::open_channel_with_retry(&session, &request, &peer_addr, &stats).await {
@@ -103,7 +152,24 @@ async fn handle_client(
     let mut channel = opened.channel;
     if let Err(error) = tunnel::pump(stream, &mut channel, Arc::clone(&stats)).await {
         if error.ssh_session_failed() {
+            tracing::warn!(
+                event = "ssh_tunnel_failed",
+                peer = %peer_addr,
+                target_host = %request.host,
+                target_port = request.port,
+                error = %error,
+                "SSH tunnel failed"
+            );
             session::mark_dead_if_generation(&session, &stats, opened.generation).await;
+        } else {
+            tracing::debug!(
+                event = "tunnel_failed",
+                peer = %peer_addr,
+                target_host = %request.host,
+                target_port = request.port,
+                error = %error,
+                "Local tunnel failed"
+            );
         }
         return Err(error.into());
     }

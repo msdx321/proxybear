@@ -23,7 +23,12 @@ pub async fn connect(
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         config.runtime_config()?.ssh
     };
-    log::info!(
+    tracing::info!(
+        event = "ssh_connecting",
+        username = %snapshot.username,
+        server = %snapshot.server,
+        port = snapshot.port,
+        auth = snapshot.auth_method.as_str(),
         "Connecting to {}@{}:{} (auth={})",
         snapshot.username,
         snapshot.server,
@@ -58,7 +63,10 @@ pub async fn connect(
         }
     }
 
-    log::info!("SSH authenticated successfully");
+    tracing::info!(
+        event = "ssh_authenticated",
+        "SSH authenticated successfully"
+    );
     Ok(session)
 }
 
@@ -67,7 +75,11 @@ async fn authenticate_password(
     username: &str,
     password: &str,
 ) -> Result<()> {
-    log::info!("Authenticating with password");
+    tracing::info!(
+        event = "ssh_authenticating",
+        auth = "password",
+        "Authenticating with password"
+    );
     let auth_result = session
         .authenticate_password(username, password)
         .await
@@ -84,7 +96,12 @@ async fn authenticate_public_key(
     key_path: &str,
     key_password: &str,
 ) -> Result<()> {
-    log::info!("Authenticating with public key: {key_path}");
+    tracing::info!(
+        event = "ssh_authenticating",
+        auth = "key",
+        key_path = %key_path,
+        "Authenticating with public key"
+    );
     let passphrase = (!key_password.is_empty()).then_some(key_password);
     let key_pair = load_secret_key(key_path, passphrase).context("failed to load SSH key")?;
     let auth_result = session

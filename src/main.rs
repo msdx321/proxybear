@@ -69,7 +69,7 @@ impl ProxyBear {
         platform::activate_as_accessory();
         let paths = app_paths().context("app paths")?;
         logging::init(&paths.config_dir).context("open log file")?;
-        log::info!("ProxyBear starting");
+        tracing::info!(event = "app_started", "ProxyBear starting");
         let config = load_config(&paths).context("load config")?;
         let stats = Arc::new(ProxyStats::default());
         stats.set_status("Stopped");
@@ -258,7 +258,7 @@ impl ProxyBear {
                     self.stats
                         .set_error(format!("failed to clear log: {error}"));
                 } else {
-                    log::debug!("Log cleared");
+                    tracing::debug!(event = "log_cleared", "Log cleared");
                     return iced::widget::operation::snap_to_end(LOG_SCROLL_ID);
                 }
             }

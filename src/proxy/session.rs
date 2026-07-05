@@ -96,10 +96,25 @@ pub async fn open_channel_with_retry(
                     });
                 }
                 Err(ChannelAttemptError::Target(error)) => {
+                    tracing::warn!(
+                        event = "target_channel_failed",
+                        peer = %peer_addr,
+                        target_host = %request.host,
+                        target_port = request.port,
+                        error = %error,
+                        "SSH server failed to open target channel"
+                    );
                     return Err(error).context("SSH server failed to open target channel");
                 }
                 Err(ChannelAttemptError::Session(error)) => {
-                    log::warn!("SSH session failed: {error}");
+                    tracing::warn!(
+                        event = "ssh_session_failed",
+                        peer = %peer_addr,
+                        target_host = %request.host,
+                        target_port = request.port,
+                        error = %error,
+                        "SSH session failed"
+                    );
                     return open_after_reconnect(session, request, peer_addr, stats, generation)
                         .await;
                 }
@@ -126,6 +141,17 @@ async fn open_after_reconnect(
     }
     let channel = open_direct_tcpip(&state.handle, request, peer_addr)
         .await
+        .map_err(|error| {
+            tracing::warn!(
+                event = "target_channel_failed_after_reconnect",
+                peer = %peer_addr,
+                target_host = %request.host,
+                target_port = request.port,
+                error = %error,
+                "Failed to open SSH channel after reconnect"
+            );
+            error
+        })
         .context("failed to open SSH channel after reconnect")?;
     Ok(OpenedChannel {
         channel,
@@ -156,7 +182,8 @@ async fn open_channel_with_stall_check(
     tokio::select! {
         result = &mut open => classify_channel_open(result),
         () = sleep(CHANNEL_OPEN_RESPONSE_TIMEOUT) => {
-            log::warn!(
+            tracing::warn!(
+                event = "ssh_channel_stalled",
                 "SSH channel open has not responded after {CHANNEL_OPEN_RESPONSE_TIMEOUT:?}; checking session liveness"
             );
             let ping = timeout(SSH_PING_TIMEOUT, handle.send_ping());
@@ -165,7 +192,10 @@ async fn open_channel_with_stall_check(
                 result = &mut open => classify_channel_open(result),
                 result = &mut ping => match result {
                     Ok(Ok(())) => {
-                        log::info!("SSH session answered ping; continuing to wait for channel open");
+                        tracing::info!(
+                            event = "ssh_ping_answered",
+                            "SSH session answered ping; continuing to wait for channel open"
+                        );
                         classify_channel_open(open.as_mut().await)
                     }
                     Ok(Err(error)) => Err(ChannelAttemptError::Session(
@@ -199,10 +229,18 @@ fn mark_session_dead(state: &mut SessionState, stats: &ProxyStats) {
 }
 
 async fn reconnect_session(state: &mut SessionState, stats: &ProxyStats) -> Result<()> {
-    log::info!("Reconnecting SSH session...");
+    tracing::info!(event = "ssh_reconnecting", "Reconnecting SSH session");
     stats.set_status("Reconnecting SSH session...");
     let new_handle = ssh::connect(Arc::clone(&state.config), state.paths.clone())
         .await
+        .map_err(|error| {
+            tracing::error!(
+                event = "ssh_reconnect_failed",
+                error = %error,
+                "Failed to reconnect SSH session"
+            );
+            error
+        })
         .context("failed to reconnect SSH session")?;
     state.handle = new_handle;
     state.dead = false;
@@ -210,7 +248,7 @@ async fn reconnect_session(state: &mut SessionState, stats: &ProxyStats) -> Resu
     stats.ssh_connected();
     stats.clear_error();
     stats.set_status(state.ready_status.clone());
-    log::info!("SSH session reconnected");
+    tracing::info!(event = "ssh_reconnected", "SSH session reconnected");
     Ok(())
 }
 
