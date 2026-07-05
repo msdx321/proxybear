@@ -161,6 +161,7 @@ async fn handle_client(
                 "SSH tunnel failed"
             );
             session::mark_dead_if_generation(&session, &stats, opened.generation).await;
+            return Ok(());
         } else {
             tracing::debug!(
                 event = "tunnel_failed",

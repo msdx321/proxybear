@@ -78,15 +78,12 @@ pub async fn open_channel_with_retry(
     peer_addr: &SocketAddr,
     stats: &ProxyStats,
 ) -> Result<OpenedChannel> {
-    {
+    let failed_generation = {
         let state = session.read().await;
 
         if !state.dead && state.handle.is_closed() {
-            return open_after_reconnect(session, request, peer_addr, stats, state.generation)
-                .await;
-        }
-
-        if !state.dead {
+            state.generation
+        } else if !state.dead {
             let generation = state.generation;
             match open_channel_with_stall_check(&state.handle, request, peer_addr).await {
                 Ok(channel) => {
@@ -115,14 +112,15 @@ pub async fn open_channel_with_retry(
                         error = %error,
                         "SSH session failed"
                     );
-                    return open_after_reconnect(session, request, peer_addr, stats, generation)
-                        .await;
+                    generation
                 }
             }
-        };
-    }
+        } else {
+            u64::MAX
+        }
+    };
 
-    open_after_reconnect(session, request, peer_addr, stats, u64::MAX).await
+    open_after_reconnect(session, request, peer_addr, stats, failed_generation).await
 }
 
 async fn open_after_reconnect(

@@ -159,7 +159,7 @@ impl ProxyBear {
             stats::subscription().map(Message::Stats),
             iced::window::events().map(|(id, ev)| Message::Window(id, ev)),
         ];
-        if self.settings_window.is_some() && self.proxy.is_running() {
+        if self.proxy.is_running() {
             subs.push(iced::time::every(SETTINGS_STATS_INTERVAL).map(|_| Message::Tick));
         }
         if self.settings_window.is_some() && self.active_tab == SettingsTab::Logs {
