@@ -24,6 +24,8 @@ use settings::{LOG_SCROLL_ID, LogTail, SettingsField, SettingsForm, SettingsTab}
 
 const SETTINGS_WINDOW_WIDTH: f32 = 520.0;
 const SETTINGS_WINDOW_HEIGHT: f32 = 640.0;
+const SETTINGS_STATS_INTERVAL: Duration = Duration::from_secs(5);
+const LOG_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone)]
 enum Message {
@@ -152,11 +154,11 @@ impl ProxyBear {
             stats::subscription().map(Message::Stats),
             iced::window::events().map(|(id, ev)| Message::Window(id, ev)),
         ];
-        if self.settings_window.is_some() {
-            subs.push(iced::time::every(Duration::from_secs(1)).map(|_| Message::Tick));
+        if self.settings_window.is_some() && self.proxy.is_running() {
+            subs.push(iced::time::every(SETTINGS_STATS_INTERVAL).map(|_| Message::Tick));
         }
         if self.settings_window.is_some() && self.active_tab == SettingsTab::Logs {
-            subs.push(iced::time::every(Duration::from_secs(1)).map(|_| Message::LogTick));
+            subs.push(iced::time::every(LOG_REFRESH_INTERVAL).map(|_| Message::LogTick));
         }
         iced::Subscription::batch(subs)
     }
