@@ -21,7 +21,7 @@ concurrency:
 jobs:
   verify:
     name: Verify
-    runs-on: macos-latest
+    runs-on: macos-26
     timeout-minutes: 35
 
     steps:
@@ -41,5 +41,8 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+      - name: Check build
+        run: cargo check --locked --all-targets --all-features
+
       - name: Run clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings

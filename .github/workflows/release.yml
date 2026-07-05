@@ -4,26 +4,35 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to rebuild, for example v0.1.10"
+        required: true
+        type: string
 
 env:
   CARGO_TERM_COLOR: always
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
   cancel-in-progress: false
 
 jobs:
   verify:
     name: Verify release
-    runs-on: macos-latest
+    runs-on: macos-26
     timeout-minutes: 35
 
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -33,24 +42,41 @@ jobs:
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: macos-rust
+          shared-key: ${{ runner.os }}-${{ runner.arch }}-rust
+
+      - name: Validate release tag
+        run: |
+          case "$RELEASE_TAG" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *)
+              echo "Release tag must look like vX.Y.Z, got: $RELEASE_TAG" >&2
+              exit 1
+              ;;
+          esac
+
+          cargo_version="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json, sys; print(json.load(sys.stdin)["packages"][0]["version"])')"
+          tag_version="${RELEASE_TAG#v}"
+          if [ "$cargo_version" != "$tag_version" ]; then
+            echo "Cargo.toml version $cargo_version does not match tag $RELEASE_TAG" >&2
+            exit 1
+          fi
 
       - name: Check formatting
         run: cargo fmt --all -- --check
 
       - name: Run clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
       - name: Run tests
-        run: cargo test --all-targets --all-features
+        run: cargo test --locked --all-targets --all-features
 
       - name: Build release binary
-        run: cargo build --release --all-features
+        run: cargo build --locked --release --all-features
 
   package:
     name: Package and release
     needs: verify
-    runs-on: macos-latest
+    runs-on: macos-26
     timeout-minutes: 45
     permissions:
       contents: write
@@ -58,6 +84,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -65,12 +93,18 @@ jobs:
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: macos-rust
+          shared-key: ${{ runner.os }}-${{ runner.arch }}-rust
+
+      - name: Restore cargo-bundle cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-bundle
+          key: cargo-bundle-${{ runner.os }}-${{ runner.arch }}-0.11.0
 
       - name: Install cargo-bundle
         run: |
           if ! command -v cargo-bundle >/dev/null 2>&1; then
-            cargo install cargo-bundle --locked
+            cargo install cargo-bundle --version 0.11.0 --locked
           fi
 
       - name: Build app bundle
@@ -82,7 +116,10 @@ jobs:
 
       - name: Ad-hoc code sign and repackage
         run: |
+          VERSION="${RELEASE_TAG#v}"
           APP="target/release/bundle/osx/ProxyBear.app"
+          APP_ZIP="target/release/bundle/ProxyBear-${VERSION}.app.zip"
+          DMG="target/release/bundle/dmg/ProxyBear-${VERSION}.dmg"
           codesign --remove-signature "$APP/Contents/MacOS/proxybear" 2>/dev/null || true
           codesign --force --deep --sign - "$APP"
           rm -rf target/release/bundle/dmg
@@ -90,25 +127,33 @@ jobs:
           DMG_STAGING="$(mktemp -d)"
           trap 'rm -rf "$DMG_STAGING"' EXIT
           cp -R "$APP" "$DMG_STAGING/"
-          hdiutil create -volname ProxyBear -srcfolder "$DMG_STAGING" -ov -format UDZO target/release/bundle/dmg/ProxyBear.dmg
-          ditto -c -k --keepParent "$APP" target/release/bundle/ProxyBear.app.zip
-          test -f target/release/bundle/ProxyBear.app.zip
-          test -f target/release/bundle/dmg/ProxyBear.dmg
+          hdiutil create -volname ProxyBear -srcfolder "$DMG_STAGING" -ov -format UDZO "$DMG"
+          ditto -c -k --keepParent "$APP" "$APP_ZIP"
+          (
+            cd target/release/bundle
+            shasum -a 256 "ProxyBear-${VERSION}.app.zip" "dmg/ProxyBear-${VERSION}.dmg" > SHA256SUMS
+          )
+          test -f "$APP_ZIP"
+          test -f "$DMG"
+          test -f target/release/bundle/SHA256SUMS
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: ProxyBear-release-artifacts
+          name: ProxyBear-${{ env.RELEASE_TAG }}-release-artifacts
           path: |
-            target/release/bundle/ProxyBear.app.zip
-            target/release/bundle/dmg/ProxyBear.dmg
+            target/release/bundle/ProxyBear-*.app.zip
+            target/release/bundle/dmg/ProxyBear-*.dmg
+            target/release/bundle/SHA256SUMS
           if-no-files-found: error
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
+          tag_name: ${{ env.RELEASE_TAG }}
           files: |
-            target/release/bundle/ProxyBear.app.zip
-            target/release/bundle/dmg/ProxyBear.dmg
+            target/release/bundle/ProxyBear-*.app.zip
+            target/release/bundle/dmg/ProxyBear-*.dmg
+            target/release/bundle/SHA256SUMS
           generate_release_notes: true
           fail_on_unmatched_files: true
