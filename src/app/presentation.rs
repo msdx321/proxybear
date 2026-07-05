@@ -1,6 +1,6 @@
 use tray_icon::menu::MenuItem;
 
-use crate::config::{AppConfig, AppPaths, is_autostart_enabled};
+use crate::config::AppConfig;
 
 use super::{icons::TrayIconState, stats::StatsSnapshot, tray::TrayMenu};
 
@@ -18,7 +18,6 @@ impl MenuPresenter {
     pub fn update_tray(
         &mut self,
         tray: &TrayMenu,
-        paths: &AppPaths,
         config: &AppConfig,
         stats: &StatsSnapshot,
         running: bool,
@@ -36,10 +35,9 @@ impl MenuPresenter {
             if running { "Stop Proxy" } else { "Start Proxy" },
         );
 
-        let autostart = is_autostart_enabled(paths);
-        if autostart != self.last_autostart {
-            tray.autostart.set_checked(autostart);
-            self.last_autostart = autostart;
+        if config.autostart != self.last_autostart {
+            tray.autostart.set_checked(config.autostart);
+            self.last_autostart = config.autostart;
         }
         if config.auto_connect != self.last_auto_connect {
             tray.auto_connect.set_checked(config.auto_connect);

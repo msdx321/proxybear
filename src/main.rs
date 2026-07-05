@@ -295,8 +295,7 @@ impl ProxyBear {
         self.update_icon_for(&stats, running);
 
         let config = self.config_snapshot();
-        self.menu
-            .update_tray(&self.tray, &self.paths, &config, &stats, running);
+        self.menu.update_tray(&self.tray, &config, &stats, running);
     }
 
     fn update_icon(&self) {
