@@ -2,11 +2,7 @@ use tray_icon::menu::MenuItem;
 
 use crate::config::{AppConfig, AppPaths, is_autostart_enabled};
 
-use super::{
-    icons::TrayIconState,
-    stats::StatsSnapshot,
-    tray::{self, TrayMenu},
-};
+use super::{icons::TrayIconState, stats::StatsSnapshot, tray::TrayMenu};
 
 #[derive(Default)]
 pub struct MenuPresenter {
@@ -27,10 +23,6 @@ impl MenuPresenter {
         stats: &StatsSnapshot,
         running: bool,
     ) {
-        if !tray::is_menu_open() {
-            return;
-        }
-
         let status = match &stats.last_error {
             Some(err) => format!("{err} | Status: {}", stats.status),
             None => format!("Status: {}", stats.status),

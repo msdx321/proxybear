@@ -16,7 +16,7 @@ use app::{
     logging, platform, presentation,
     presentation::MenuPresenter,
     proxy_control::{self, ProxyController, ProxyEvent},
-    stats::ProxyStats,
+    stats::{self, ProxyStats, StatsEvent},
     tray::{self, MenuAction, TrayMenu},
 };
 use config::{AppConfig, AppPaths, app_paths, load_config, save_config};
@@ -31,6 +31,7 @@ enum Message {
     MenuAction(MenuAction),
     AutoConnect,
     Proxy(ProxyEvent),
+    Stats(StatsEvent),
     Tick,
     LogTick,
     Window(iced::window::Id, iced::window::Event),
@@ -106,6 +107,10 @@ impl ProxyBear {
             Message::AutoConnect => self.start_proxy(),
             Message::MenuAction(a) => self.handle_menu(a),
             Message::Proxy(event) => self.handle_proxy_event(event),
+            Message::Stats(StatsEvent::Changed) => {
+                self.refresh_stats();
+                iced::Task::none()
+            }
             Message::Tick => {
                 self.proxy.reap_finished();
                 self.refresh_stats();
@@ -144,6 +149,7 @@ impl ProxyBear {
         let mut subs: Vec<iced::Subscription<Message>> = vec![
             tray::subscription().map(Message::MenuAction),
             proxy_control::subscription().map(Message::Proxy),
+            stats::subscription().map(Message::Stats),
             iced::window::events().map(|(id, ev)| Message::Window(id, ev)),
         ];
         if self.settings_window.is_some() {
@@ -250,7 +256,7 @@ impl ProxyBear {
                     self.stats
                         .set_error(format!("failed to clear log: {error}"));
                 } else {
-                    log::info!("Log cleared");
+                    log::debug!("Log cleared");
                     return iced::widget::operation::snap_to_end(LOG_SCROLL_ID);
                 }
             }
@@ -296,7 +302,8 @@ impl ProxyBear {
     }
 
     fn update_icon(&self) {
-        let clean = self.stats.snapshot().last_error.is_none();
+        let stats = self.stats.snapshot();
+        let clean = stats.last_error.is_none() && stats.ssh_current > 0;
         let _ = self
             .tray
             .set_icon_state(presentation::icon_state(self.proxy.is_running(), clean));

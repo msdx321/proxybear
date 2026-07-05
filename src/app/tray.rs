@@ -44,20 +44,12 @@ define_class!(
     impl MenuDelegate {
         #[unsafe(method(menuWillOpen:))]
         fn menu_will_open(&self, _menu: &AnyObject) {
-            MENU_IS_OPEN.with(|c| c.set(true));
             if let Some(tx) = menu_sender().as_mut() {
                 let _ = tx.try_send(MenuAction::MenuOpened);
             }
         }
-        #[unsafe(method(menuDidClose:))]
-        fn menu_did_close(&self, _menu: &AnyObject) {
-            MENU_IS_OPEN.with(|c| c.set(false));
-        }
     }
 );
-
-#[cfg(target_os = "macos")]
-thread_local! { static MENU_IS_OPEN: Cell<bool> = const { Cell::new(false) }; }
 
 #[derive(Hash)]
 struct MenuSubId;
@@ -68,17 +60,6 @@ pub fn subscription() -> iced::Subscription<MenuAction> {
         *menu_sender() = Some(tx);
         rx
     })
-}
-
-pub fn is_menu_open() -> bool {
-    #[cfg(target_os = "macos")]
-    {
-        MENU_IS_OPEN.with(Cell::get)
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        false
-    }
 }
 
 pub struct TrayMenu {

@@ -40,13 +40,15 @@ pub async fn run_proxy(
 
     stats.set_status("Connecting to SSH server...");
     let handle = ssh::connect(Arc::clone(&config), paths.clone()).await?;
+    let listening_status = format!("Listening on {local_addr}");
     let session = Arc::new(TokioMutex::new(SessionState::new(
         handle,
         Arc::clone(&config),
         paths,
+        listening_status.clone(),
     )));
     stats.clear_error();
-    stats.set_status(format!("Listening on {local_addr}"));
+    stats.set_status(listening_status);
     stats.ssh_connected();
 
     loop {

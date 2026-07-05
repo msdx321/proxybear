@@ -28,6 +28,7 @@ pub struct SessionState {
     handle: client::Handle<ssh::Client>,
     config: Arc<Mutex<AppConfig>>,
     paths: AppPaths,
+    ready_status: String,
     /// Set when direct-tcpip fails so later requests reconnect before retrying.
     dead: bool,
 }
@@ -37,11 +38,13 @@ impl SessionState {
         handle: client::Handle<ssh::Client>,
         config: Arc<Mutex<AppConfig>>,
         paths: AppPaths,
+        ready_status: String,
     ) -> Self {
         Self {
             handle,
             config,
             paths,
+            ready_status,
             dead: false,
         }
     }
@@ -148,17 +151,21 @@ fn mark_session_dead(state: &mut SessionState, stats: &ProxyStats) {
     if !state.dead {
         state.dead = true;
         stats.ssh_disconnected();
+        stats.set_status("SSH disconnected; reconnecting...");
     }
 }
 
 async fn reconnect_session(state: &mut SessionState, stats: &ProxyStats) -> Result<()> {
     log::info!("Reconnecting SSH session...");
+    stats.set_status("Reconnecting SSH session...");
     let new_handle = ssh::connect(Arc::clone(&state.config), state.paths.clone())
         .await
         .context("failed to reconnect SSH session")?;
     state.handle = new_handle;
     state.dead = false;
     stats.ssh_connected();
+    stats.clear_error();
+    stats.set_status(state.ready_status.clone());
     log::info!("SSH session reconnected");
     Ok(())
 }
