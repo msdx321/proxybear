@@ -11,7 +11,7 @@ use std::{
 use anyhow::{Context, Result};
 use tokio::{
     net::{TcpListener, TcpStream},
-    sync::{Mutex as TokioMutex, oneshot},
+    sync::{RwLock as TokioRwLock, oneshot},
 };
 
 use crate::{
@@ -41,7 +41,7 @@ pub async fn run_proxy(
     stats.set_status("Connecting to SSH server...");
     let handle = ssh::connect(Arc::clone(&config), paths.clone()).await?;
     let listening_status = format!("Listening on {local_addr}");
-    let session = Arc::new(TokioMutex::new(SessionState::new(
+    let session = Arc::new(TokioRwLock::new(SessionState::new(
         handle,
         Arc::clone(&config),
         paths,
@@ -54,7 +54,7 @@ pub async fn run_proxy(
     loop {
         tokio::select! {
             _ = &mut shutdown => {
-                let state = session.lock().await;
+                let state = session.read().await;
                 if !state.is_dead() {
                     stats.ssh_disconnected();
                 }

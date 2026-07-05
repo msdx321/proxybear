@@ -7,7 +7,7 @@ use std::{
 use anyhow::{Context, Result, anyhow};
 use russh::{Disconnect, client};
 use tokio::{
-    sync::Mutex as TokioMutex,
+    sync::RwLock as TokioRwLock,
     time::{sleep, timeout},
 };
 
@@ -21,7 +21,7 @@ use super::{socks::Request, ssh};
 const CHANNEL_OPEN_RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
 const SSH_PING_TIMEOUT: Duration = Duration::from_secs(3);
 
-pub type SharedSession = Arc<TokioMutex<SessionState>>;
+pub type SharedSession = Arc<TokioRwLock<SessionState>>;
 
 /// Shared SSH session reused across all SOCKS connections.
 pub struct SessionState {
@@ -29,6 +29,7 @@ pub struct SessionState {
     config: Arc<Mutex<AppConfig>>,
     paths: AppPaths,
     ready_status: String,
+    generation: u64,
     /// Set when direct-tcpip fails so later requests reconnect before retrying.
     dead: bool,
 }
@@ -45,6 +46,7 @@ impl SessionState {
             config,
             paths,
             ready_status,
+            generation: 0,
             dead: false,
         }
     }
@@ -63,35 +65,55 @@ impl SessionState {
 
 /// Open a direct-tcpip channel, reconnecting the SSH session if it has died.
 ///
-/// The mutex intentionally serializes channel opens around reconnect. Only one
-/// request replaces the dead handle; the others wake up to a fresh session.
+/// Channel opens share read access to the current SSH handle. Reconnects take
+/// write access so only one request replaces a dead handle.
 pub async fn open_channel_with_retry(
     session: &SharedSession,
     request: &Request,
     peer_addr: &SocketAddr,
     stats: &ProxyStats,
 ) -> Result<russh::Channel<client::Msg>> {
-    let mut state = session.lock().await;
+    {
+        let state = session.read().await;
 
-    if !state.dead && state.handle.is_closed() {
-        log::warn!("SSH session handle is closed");
+        if !state.dead && state.handle.is_closed() {
+            return open_after_reconnect(session, request, peer_addr, stats, state.generation)
+                .await;
+        }
+
+        if !state.dead {
+            let generation = state.generation;
+            match open_channel_with_stall_check(&state.handle, request, peer_addr).await {
+                Ok(channel) => return Ok(channel),
+                Err(ChannelAttemptError::Target(error)) => {
+                    return Err(error).context("SSH server failed to open target channel");
+                }
+                Err(ChannelAttemptError::Session(error)) => {
+                    log::warn!("SSH session failed: {error}");
+                    return open_after_reconnect(session, request, peer_addr, stats, generation)
+                        .await;
+                }
+            }
+        };
+    }
+
+    open_after_reconnect(session, request, peer_addr, stats, u64::MAX).await
+}
+
+async fn open_after_reconnect(
+    session: &SharedSession,
+    request: &Request,
+    peer_addr: &SocketAddr,
+    stats: &ProxyStats,
+    failed_generation: u64,
+) -> Result<russh::Channel<client::Msg>> {
+    let mut state = session.write().await;
+    if state.generation == failed_generation && !state.dead {
         mark_session_dead(&mut state, stats);
     }
-
-    if !state.dead {
-        match open_channel_with_stall_check(&state.handle, request, peer_addr).await {
-            Ok(channel) => return Ok(channel),
-            Err(ChannelAttemptError::Target(error)) => {
-                return Err(error).context("SSH server failed to open target channel");
-            }
-            Err(ChannelAttemptError::Session(error)) => {
-                log::warn!("SSH session failed: {error}");
-                mark_session_dead(&mut state, stats);
-            }
-        }
+    if state.dead {
+        reconnect_session(&mut state, stats).await?;
     }
-
-    reconnect_session(&mut state, stats).await?;
     open_direct_tcpip(&state.handle, request, peer_addr)
         .await
         .context("failed to open SSH channel after reconnect")
@@ -163,6 +185,7 @@ async fn reconnect_session(state: &mut SessionState, stats: &ProxyStats) -> Resu
         .context("failed to reconnect SSH session")?;
     state.handle = new_handle;
     state.dead = false;
+    state.generation = state.generation.wrapping_add(1);
     stats.ssh_connected();
     stats.clear_error();
     stats.set_status(state.ready_status.clone());
