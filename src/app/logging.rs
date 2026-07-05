@@ -20,7 +20,6 @@ pub fn init(config_dir: &Path) -> Result<()> {
     let filter =
         EnvFilter::try_from_default_env().or_else(|_| EnvFilter::try_new(DEFAULT_LOG_FILTER))?;
 
-    tracing_log::LogTracer::init()?;
     tracing_subscriber::registry()
         .with(filter)
         .with(fmt::layer().with_ansi(false).with_writer(log_writer))
