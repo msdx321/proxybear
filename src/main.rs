@@ -377,7 +377,7 @@ impl ProxyBear {
     }
 
     fn open_log(&mut self) {
-        if let Err(error) = Command::new("open").arg(self.log_tail.path()).spawn() {
+        if let Err(error) = open::that(self.log_tail.path()) {
             self.stats
                 .set_error(format!("failed to open log file: {error}"));
         }

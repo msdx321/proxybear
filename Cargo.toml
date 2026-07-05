@@ -6,6 +6,7 @@ description = "Native macOS menu-bar SSH SOCKS proxy."
 
 [dependencies]
 anyhow = "1.0"
+auto-launch = "0.6.0"
 log = "0.4"
 directories = "6.0"
 iced = { version = "0.14", default-features = false, features = ["tiny-skia", "tokio"] }
@@ -13,6 +14,7 @@ native-dialog = "0.9.7"
 objc2 = "0.6.4"
 objc2-app-kit = "0.3.2"
 objc2-foundation = "0.3.2"
+open = "5.3.6"
 russh = "0.61.2"
 serde = { version = "1.0", features = ["derive"] }
 tokio = { version = "1.52", features = ["io-util", "macros", "net", "rt-multi-thread", "sync"] }
