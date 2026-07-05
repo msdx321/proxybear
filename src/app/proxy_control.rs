@@ -2,7 +2,11 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use anyhow::{Context, Result};
 use iced::futures::channel::mpsc;
-use tokio::{runtime::Runtime, sync::oneshot, task::JoinHandle};
+use tokio::{
+    runtime::{Builder, Runtime},
+    sync::oneshot,
+    task::JoinHandle,
+};
 
 use crate::{
     config::{AppConfig, AppPaths},
@@ -31,8 +35,15 @@ struct ProxyHandle {
 
 impl ProxyController {
     pub fn new() -> Result<Self> {
+        let runtime = Builder::new_multi_thread()
+            .worker_threads(2)
+            .thread_name("proxybear-proxy")
+            .enable_all()
+            .build()
+            .context("tokio runtime")?;
+
         Ok(Self {
-            runtime: Runtime::new().context("tokio runtime")?,
+            runtime,
             handle: None,
         })
     }
