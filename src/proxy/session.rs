@@ -23,6 +23,11 @@ const SSH_PING_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub type SharedSession = Arc<TokioRwLock<SessionState>>;
 
+pub struct OpenedChannel {
+    pub channel: russh::Channel<client::Msg>,
+    pub generation: u64,
+}
+
 /// Shared SSH session reused across all SOCKS connections.
 pub struct SessionState {
     handle: client::Handle<ssh::Client>,
@@ -72,7 +77,7 @@ pub async fn open_channel_with_retry(
     request: &Request,
     peer_addr: &SocketAddr,
     stats: &ProxyStats,
-) -> Result<russh::Channel<client::Msg>> {
+) -> Result<OpenedChannel> {
     {
         let state = session.read().await;
 
@@ -84,7 +89,12 @@ pub async fn open_channel_with_retry(
         if !state.dead {
             let generation = state.generation;
             match open_channel_with_stall_check(&state.handle, request, peer_addr).await {
-                Ok(channel) => return Ok(channel),
+                Ok(channel) => {
+                    return Ok(OpenedChannel {
+                        channel,
+                        generation,
+                    });
+                }
                 Err(ChannelAttemptError::Target(error)) => {
                     return Err(error).context("SSH server failed to open target channel");
                 }
@@ -106,7 +116,7 @@ async fn open_after_reconnect(
     peer_addr: &SocketAddr,
     stats: &ProxyStats,
     failed_generation: u64,
-) -> Result<russh::Channel<client::Msg>> {
+) -> Result<OpenedChannel> {
     let mut state = session.write().await;
     if state.generation == failed_generation && !state.dead {
         mark_session_dead(&mut state, stats);
@@ -114,9 +124,20 @@ async fn open_after_reconnect(
     if state.dead {
         reconnect_session(&mut state, stats).await?;
     }
-    open_direct_tcpip(&state.handle, request, peer_addr)
+    let channel = open_direct_tcpip(&state.handle, request, peer_addr)
         .await
-        .context("failed to open SSH channel after reconnect")
+        .context("failed to open SSH channel after reconnect")?;
+    Ok(OpenedChannel {
+        channel,
+        generation: state.generation,
+    })
+}
+
+pub async fn mark_dead_if_generation(session: &SharedSession, stats: &ProxyStats, generation: u64) {
+    let mut state = session.write().await;
+    if state.generation == generation {
+        mark_session_dead(&mut state, stats);
+    }
 }
 
 enum ChannelAttemptError {

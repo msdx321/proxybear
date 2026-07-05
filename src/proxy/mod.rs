@@ -90,9 +90,9 @@ async fn handle_client(
     socks::negotiate_no_auth(&mut stream).await?;
     let request = socks::read_request(&mut stream).await?;
 
-    let mut channel =
+    let opened =
         match session::open_channel_with_retry(&session, &request, &peer_addr, &stats).await {
-            Ok(channel) => channel,
+            Ok(opened) => opened,
             Err(error) => {
                 let _ = socks::write_reply(&mut stream, socks::REPLY_GENERAL_FAILURE).await;
                 return Err(error);
@@ -100,5 +100,12 @@ async fn handle_client(
         };
 
     socks::write_reply(&mut stream, socks::REPLY_SUCCEEDED).await?;
-    tunnel::pump(stream, &mut channel, stats).await
+    let mut channel = opened.channel;
+    if let Err(error) = tunnel::pump(stream, &mut channel, Arc::clone(&stats)).await {
+        if error.ssh_session_failed() {
+            session::mark_dead_if_generation(&session, &stats, opened.generation).await;
+        }
+        return Err(error.into());
+    }
+    Ok(())
 }
