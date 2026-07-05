@@ -16,7 +16,7 @@ use app::{
     logging, platform, presentation,
     presentation::MenuPresenter,
     proxy_control::{self, ProxyController, ProxyEvent},
-    stats::{self, ProxyStats, StatsEvent},
+    stats::{self, ProxyStats, StatsEvent, StatsSnapshot},
     tray::{self, MenuAction, TrayMenu},
 };
 use config::{AppConfig, AppPaths, app_paths, load_config, save_config};
@@ -290,25 +290,25 @@ impl ProxyBear {
 impl ProxyBear {
     fn refresh_stats(&mut self) {
         let stats = self.stats.snapshot();
+        let running = self.proxy.is_running();
         self.stats_text = presentation::settings_status(&stats);
-        self.update_icon();
+        self.update_icon_for(&stats, running);
 
         let config = self.config_snapshot();
-        self.menu.update_tray(
-            &self.tray,
-            &self.paths,
-            &config,
-            &stats,
-            self.proxy.is_running(),
-        );
+        self.menu
+            .update_tray(&self.tray, &self.paths, &config, &stats, running);
     }
 
     fn update_icon(&self) {
         let stats = self.stats.snapshot();
+        self.update_icon_for(&stats, self.proxy.is_running());
+    }
+
+    fn update_icon_for(&self, stats: &StatsSnapshot, running: bool) {
         let clean = stats.last_error.is_none() && stats.ssh_current > 0;
         let _ = self
             .tray
-            .set_icon_state(presentation::icon_state(self.proxy.is_running(), clean));
+            .set_icon_state(presentation::icon_state(running, clean));
     }
 }
 
