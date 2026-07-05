@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use iced::widget::operation::{RelativeOffset, snap_to};
 use native_dialog::DialogBuilder;
 
 use app::{
@@ -26,6 +27,10 @@ const SETTINGS_WINDOW_WIDTH: f32 = 520.0;
 const SETTINGS_WINDOW_HEIGHT: f32 = 640.0;
 const SETTINGS_STATS_INTERVAL: Duration = Duration::from_secs(5);
 const LOG_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+
+fn snap_logs_to_latest() -> iced::Task<Message> {
+    snap_to(LOG_SCROLL_ID, RelativeOffset::START)
+}
 
 #[derive(Debug, Clone)]
 enum Message {
@@ -120,7 +125,7 @@ impl ProxyBear {
             }
             Message::LogTick => {
                 if self.active_tab == SettingsTab::Logs && self.log_tail.refresh() > 0 {
-                    return iced::widget::operation::snap_to_end(LOG_SCROLL_ID);
+                    return snap_logs_to_latest();
                 }
                 iced::Task::none()
             }
@@ -213,7 +218,7 @@ impl ProxyBear {
                 self.active_tab = tab;
                 if tab == SettingsTab::Logs {
                     self.log_tail.refresh();
-                    return iced::widget::operation::snap_to_end(LOG_SCROLL_ID);
+                    return snap_logs_to_latest();
                 }
             }
             SettingsField::Server(v) => self.form.server = v,
@@ -259,7 +264,7 @@ impl ProxyBear {
                         .set_error(format!("failed to clear log: {error}"));
                 } else {
                     tracing::debug!(event = "log_cleared", "Log cleared");
-                    return iced::widget::operation::snap_to_end(LOG_SCROLL_ID);
+                    return snap_logs_to_latest();
                 }
             }
         }

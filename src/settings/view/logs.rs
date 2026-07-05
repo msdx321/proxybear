@@ -11,7 +11,7 @@ pub(super) fn tab<'a>(logs: &'a LogTail) -> Element<'a, SettingsField> {
     if logs.lines().is_empty() {
         lines = lines.push(text("No log entries yet").size(13));
     } else {
-        for line in logs.lines() {
+        for line in logs.lines().iter().rev() {
             lines = lines.push(
                 text(line)
                     .size(12)
@@ -44,16 +44,11 @@ pub(super) fn tab<'a>(logs: &'a LogTail) -> Element<'a, SettingsField> {
             .spacing(8),
             text(logs.path_label()).size(10).wrapping(Wrapping::Word),
             error,
-            container(
-                scrollable(lines)
-                    .id(LOG_SCROLL_ID)
-                    .anchor_bottom()
-                    .height(Length::Fill)
-            )
-            .padding(10)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .style(container::rounded_box),
+            container(scrollable(lines).id(LOG_SCROLL_ID).height(Length::Fill))
+                .padding(10)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .style(container::rounded_box),
         ]
         .spacing(8)
         .height(Length::Fill)
