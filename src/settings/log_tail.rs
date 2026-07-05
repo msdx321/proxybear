@@ -101,6 +101,9 @@ impl LogTail {
             self.lines.clear();
             self.status = "Log rotated or truncated".into();
         }
+        if len == self.offset {
+            return Ok(0);
+        }
 
         let mut file = fs::File::open(&self.path)?;
         file.seek(SeekFrom::Start(self.offset))?;
