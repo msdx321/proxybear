@@ -48,10 +48,8 @@ impl MenuPresenter {
 
 pub fn settings_status(stats: &StatsSnapshot) -> String {
     format!(
-        "{} | SSH: {} ({} total) | up {} | down {}",
+        "{} | up {} | down {}",
         stats.status,
-        stats.ssh_current,
-        stats.ssh_total,
         format_bytes(stats.bytes_up),
         format_bytes(stats.bytes_down)
     )
@@ -67,9 +65,7 @@ pub fn icon_state(running: bool, clean: bool) -> TrayIconState {
 
 fn stats_summary(stats: &StatsSnapshot) -> String {
     format!(
-        "{} SSH ({} total), up {}, down {}",
-        stats.ssh_current,
-        stats.ssh_total,
+        "up {}, down {}",
         format_bytes(stats.bytes_up),
         format_bytes(stats.bytes_down)
     )

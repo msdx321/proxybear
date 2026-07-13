@@ -79,7 +79,7 @@ impl TrayMenu {
     pub fn new(paths: &AppPaths, auto_connect: bool) -> Result<Self> {
         let menu = Menu::new();
         let status = MenuItem::with_id("status", "Status: Stopped", false, None);
-        let stats = MenuItem::with_id("stats", "0 connections", false, None);
+        let stats = MenuItem::with_id("stats", "up 0 B, down 0 B", false, None);
         let config = MenuItem::with_id("config", "No server configured", false, None);
         let start_stop = MenuItem::with_id("start_stop", "Start Proxy", true, None);
         let settings = MenuItem::with_id("settings", "Settings\u{2026}", true, None);

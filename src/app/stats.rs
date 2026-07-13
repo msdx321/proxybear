@@ -1,6 +1,6 @@
 use std::sync::{
     Mutex, MutexGuard,
-    atomic::{AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
 use iced::futures::channel::mpsc;
@@ -14,8 +14,7 @@ pub enum StatsEvent {
 
 #[derive(Default)]
 pub struct ProxyStats {
-    ssh_current: AtomicU64,
-    ssh_total: AtomicU64,
+    ssh_connected: AtomicBool,
     bytes_up: AtomicU64,
     bytes_down: AtomicU64,
     status: Mutex<String>,
@@ -24,8 +23,7 @@ pub struct ProxyStats {
 
 #[derive(Clone, Debug)]
 pub struct StatsSnapshot {
-    pub ssh_current: u64,
-    pub ssh_total: u64,
+    pub ssh_connected: bool,
     pub bytes_up: u64,
     pub bytes_down: u64,
     pub status: String,
@@ -61,19 +59,13 @@ impl ProxyStats {
     }
 
     pub fn ssh_connected(&self) {
-        self.ssh_current.fetch_add(1, Ordering::Relaxed);
-        self.ssh_total.fetch_add(1, Ordering::Relaxed);
-        notify_changed();
+        if !self.ssh_connected.swap(true, Ordering::Relaxed) {
+            notify_changed();
+        }
     }
 
     pub fn ssh_disconnected(&self) {
-        if self
-            .ssh_current
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                (current > 0).then_some(current - 1)
-            })
-            .is_ok()
-        {
+        if self.ssh_connected.swap(false, Ordering::Relaxed) {
             notify_changed();
         }
     }
@@ -88,8 +80,7 @@ impl ProxyStats {
 
     pub fn snapshot(&self) -> StatsSnapshot {
         StatsSnapshot {
-            ssh_current: self.ssh_current.load(Ordering::Relaxed),
-            ssh_total: self.ssh_total.load(Ordering::Relaxed),
+            ssh_connected: self.ssh_connected.load(Ordering::Relaxed),
             bytes_up: self.bytes_up.load(Ordering::Relaxed),
             bytes_down: self.bytes_down.load(Ordering::Relaxed),
             status: lock(&self.status).clone(),

@@ -309,7 +309,7 @@ impl ProxyBear {
     }
 
     fn update_icon_for(&self, stats: &StatsSnapshot, running: bool) {
-        let clean = stats.last_error.is_none() && stats.ssh_current > 0;
+        let clean = stats.last_error.is_none() && stats.ssh_connected;
         let _ = self
             .tray
             .set_icon_state(presentation::icon_state(running, clean));
