@@ -96,13 +96,16 @@ impl ProxyController {
     }
 
     pub fn stop(&mut self, stats: &ProxyStats) {
-        if let Some(mut handle) = self.handle.take() {
+        if let Some(handle) = self.handle.as_mut() {
             if let Some(shutdown) = handle.shutdown.take() {
-                let _ = shutdown.send(());
+                stats.set_status("Stopping...");
+                if shutdown.send(()).is_err() {
+                    stats.set_status("Stopped");
+                }
             }
-            handle.task.abort();
+        } else {
+            stats.set_status("Stopped");
         }
-        stats.set_status("Stopped");
     }
 }
 

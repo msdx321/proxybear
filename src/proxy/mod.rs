@@ -12,6 +12,7 @@ use anyhow::{Context, Result};
 use tokio::{
     net::{TcpListener, TcpStream},
     sync::{RwLock as TokioRwLock, oneshot},
+    task::JoinSet,
 };
 
 use crate::{
@@ -49,16 +50,21 @@ pub async fn run_proxy(
 
     tracing::info!(event = "proxy_starting", local_addr = %local_addr, "Proxy starting");
     stats.set_status("Connecting to SSH server...");
-    let handle = ssh::connect(Arc::clone(&config), paths.clone())
-        .await
-        .map_err(|error| {
+    let handle = tokio::select! {
+        result = ssh::connect(Arc::clone(&config), paths.clone()) => result.map_err(|error| {
             tracing::error!(
                 event = "ssh_connect_failed",
                 error = %error,
                 "Failed to connect SSH session"
             );
             error
-        })?;
+        })?,
+        _ = &mut shutdown => {
+            stats.set_status("Stopped");
+            tracing::info!(event = "proxy_stopped", reason = "shutdown", "Proxy stopped");
+            return Ok(());
+        }
+    };
     let listening_status = format!("Listening on {local_addr}");
     let session = Arc::new(TokioRwLock::new(SessionState::new(
         handle,
@@ -71,14 +77,23 @@ pub async fn run_proxy(
     stats.ssh_connected();
     tracing::info!(event = "proxy_started", local_addr = %local_addr, "Proxy started");
 
+    let mut clients = JoinSet::new();
     loop {
         tokio::select! {
             _ = &mut shutdown => {
+                clients.abort_all();
+                while clients.join_next().await.is_some() {}
                 let state = session.read().await;
                 if !state.is_dead() {
                     stats.ssh_disconnected();
                 }
-                state.disconnect().await;
+                if let Err(error) = state.disconnect().await {
+                    tracing::warn!(
+                        event = "ssh_disconnect_failed",
+                        error = %error,
+                        "Failed to close SSH session during shutdown"
+                    );
+                }
                 stats.set_status("Stopped");
                 tracing::info!(event = "proxy_stopped", reason = "shutdown", "Proxy stopped");
                 return Ok(());
@@ -87,12 +102,13 @@ pub async fn run_proxy(
                 let (stream, peer_addr) = accepted.context("failed to accept local connection")?;
                 let session = Arc::clone(&session);
                 let stats = Arc::clone(&stats);
-                tokio::spawn(async move {
+                clients.spawn(async move {
                     if let Err(error) = handle_client(stream, peer_addr, session, Arc::clone(&stats)).await {
                         stats.set_error(error.to_string());
                     }
                 });
             }
+            _ = clients.join_next(), if !clients.is_empty() => {}
         }
     }
 }

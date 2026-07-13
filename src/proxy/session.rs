@@ -19,6 +19,7 @@ use crate::{
 use super::{socks::Request, ssh};
 
 const CHANNEL_OPEN_RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
+const SSH_DISCONNECT_TIMEOUT: Duration = Duration::from_secs(1);
 const SSH_PING_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub type SharedSession = Arc<TokioRwLock<SessionState>>;
@@ -60,11 +61,25 @@ impl SessionState {
         self.dead
     }
 
-    pub async fn disconnect(&self) {
-        self.handle
-            .disconnect(Disconnect::ByApplication, "", "English")
-            .await
-            .ok();
+    pub async fn disconnect(&self) -> Result<()> {
+        timeout(SSH_DISCONNECT_TIMEOUT, async {
+            if self.handle.is_closed() {
+                return Ok(());
+            }
+            self.handle
+                .disconnect(Disconnect::ByApplication, "", "English")
+                .await
+                .context("failed to send SSH disconnect")?;
+            while !self.handle.is_closed() {
+                sleep(Duration::from_millis(10)).await;
+            }
+            Ok::<_, anyhow::Error>(())
+        })
+        .await
+        .with_context(|| {
+            format!("SSH session did not close within {SSH_DISCONNECT_TIMEOUT:?}")
+        })??;
+        Ok(())
     }
 }
 
@@ -229,6 +244,10 @@ fn mark_session_dead(state: &mut SessionState, stats: &ProxyStats) {
 async fn reconnect_session(state: &mut SessionState, stats: &ProxyStats) -> Result<()> {
     tracing::info!(event = "ssh_reconnecting", "Reconnecting SSH session");
     stats.set_status("Reconnecting SSH session...");
+    state
+        .disconnect()
+        .await
+        .context("failed to close old SSH session")?;
     let new_handle = ssh::connect(Arc::clone(&state.config), state.paths.clone())
         .await
         .map_err(|error| {
