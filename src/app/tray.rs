@@ -31,6 +31,7 @@ pub enum MenuAction {
     ToggleAutoConnect,
     Quit,
     MenuOpened,
+    MenuClosed,
 }
 
 static MENU_TX: Mutex<Option<mpsc::Sender<MenuAction>>> = Mutex::new(None);
@@ -46,6 +47,13 @@ define_class!(
         fn menu_will_open(&self, _menu: &AnyObject) {
             if let Some(tx) = menu_sender().as_mut() {
                 let _ = tx.try_send(MenuAction::MenuOpened);
+            }
+        }
+
+        #[unsafe(method(menuDidClose:))]
+        fn menu_did_close(&self, _menu: &AnyObject) {
+            if let Some(tx) = menu_sender().as_mut() {
+                let _ = tx.try_send(MenuAction::MenuClosed);
             }
         }
     }

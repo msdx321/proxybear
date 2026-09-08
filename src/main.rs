@@ -16,7 +16,7 @@ use native_dialog::DialogBuilder;
 use app::{
     logging, platform, presentation,
     presentation::MenuPresenter,
-    proxy_control::{self, ProxyController, ProxyEvent},
+    proxy_control::{ProxyController, ProxyEvent},
     stats::{self, ProxyStats, StatsEvent, StatsSnapshot},
     tray::{self, MenuAction, TrayMenu},
 };
@@ -26,7 +26,6 @@ use settings::{LOG_SCROLL_ID, LogTail, SettingsField, SettingsForm, SettingsTab}
 const SETTINGS_WINDOW_WIDTH: f32 = 520.0;
 const SETTINGS_WINDOW_HEIGHT: f32 = 640.0;
 const SETTINGS_STATS_INTERVAL: Duration = Duration::from_secs(5);
-const LOG_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 
 fn snap_logs_to_latest() -> iced::Task<Message> {
     snap_to(LOG_SCROLL_ID, RelativeOffset::START)
@@ -40,7 +39,7 @@ enum Message {
     Proxy(ProxyEvent),
     Stats(StatsEvent),
     Tick,
-    LogTick,
+    LogChanged,
     Window(iced::window::Id, iced::window::Event),
 }
 
@@ -57,6 +56,7 @@ struct ProxyBear {
     stats_text: String,
     config_path: String,
     settings_window: Option<iced::window::Id>,
+    menu_open: bool,
 }
 
 impl ProxyBear {
@@ -103,6 +103,7 @@ impl ProxyBear {
                 stats_text: String::new(),
                 config_path,
                 settings_window: None,
+                menu_open: false,
             },
             startup_task,
         ))
@@ -119,12 +120,14 @@ impl ProxyBear {
                 iced::Task::none()
             }
             Message::Tick => {
-                self.proxy.reap_finished();
                 self.refresh_stats();
                 iced::Task::none()
             }
-            Message::LogTick => {
-                if self.active_tab == SettingsTab::Logs && self.log_tail.refresh() > 0 {
+            Message::LogChanged => {
+                if self.settings_window.is_some()
+                    && self.active_tab == SettingsTab::Logs
+                    && self.log_tail.refresh() > 0
+                {
                     return snap_logs_to_latest();
                 }
                 iced::Task::none()
@@ -155,15 +158,14 @@ impl ProxyBear {
     fn subscription(&self) -> iced::Subscription<Message> {
         let mut subs: Vec<iced::Subscription<Message>> = vec![
             tray::subscription().map(Message::MenuAction),
-            proxy_control::subscription().map(Message::Proxy),
             stats::subscription().map(Message::Stats),
             iced::window::events().map(|(id, ev)| Message::Window(id, ev)),
         ];
-        if self.proxy.is_running() {
+        if self.proxy.is_running() && (self.settings_window.is_some() || self.menu_open) {
             subs.push(iced::time::every(SETTINGS_STATS_INTERVAL).map(|_| Message::Tick));
         }
         if self.settings_window.is_some() && self.active_tab == SettingsTab::Logs {
-            subs.push(iced::time::every(LOG_REFRESH_INTERVAL).map(|_| Message::LogTick));
+            subs.push(logging::subscription().map(|()| Message::LogChanged));
         }
         iced::Subscription::batch(subs)
     }
@@ -173,7 +175,12 @@ impl ProxyBear {
     fn handle_menu(&mut self, action: MenuAction) -> iced::Task<Message> {
         match action {
             MenuAction::MenuOpened => {
+                self.menu_open = true;
                 self.refresh_stats();
+                iced::Task::none()
+            }
+            MenuAction::MenuClosed => {
+                self.menu_open = false;
                 iced::Task::none()
             }
             MenuAction::StartStop => {
@@ -318,15 +325,19 @@ impl ProxyBear {
 
 impl ProxyBear {
     fn start_proxy(&mut self) -> iced::Task<Message> {
-        if let Err(error) = self.proxy.start(
+        let task = match self.proxy.start(
             Arc::clone(&self.config),
             self.paths.clone(),
             Arc::clone(&self.stats),
         ) {
-            self.stats.set_error(error.to_string());
-        }
+            Ok(task) => task.map(Message::Proxy),
+            Err(error) => {
+                self.stats.set_error(error.to_string());
+                iced::Task::none()
+            }
+        };
         self.update_icon();
-        iced::Task::none()
+        task
     }
 
     fn stop_proxy(&mut self) {
@@ -337,11 +348,12 @@ impl ProxyBear {
     fn handle_proxy_event(&mut self, event: ProxyEvent) -> iced::Task<Message> {
         match event {
             ProxyEvent::Done(error) => {
-                self.proxy.reap_finished();
+                self.proxy.finish();
+                self.stats.set_status("Stopped");
                 if let Some(error) = error {
                     self.stats.set_error(error);
                 }
-                self.update_icon();
+                self.refresh_stats();
                 iced::Task::none()
             }
         }

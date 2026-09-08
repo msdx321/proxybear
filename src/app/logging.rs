@@ -2,14 +2,40 @@ use std::{
     fs,
     io::{self, Write},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{Arc, LazyLock, Mutex},
+    time::Duration,
 };
 
 use anyhow::Result;
+use iced::futures::SinkExt;
+use tokio::sync::watch;
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 const LOG_MAX_SIZE: u64 = 1024 * 1024;
 const DEFAULT_LOG_FILTER: &str = "warn,proxybear=info,russh=warn,iced=warn,wgpu=warn,naga=warn";
+const LOG_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+
+static LOG_CHANGED: LazyLock<watch::Sender<()>> = LazyLock::new(|| watch::channel(()).0);
+
+pub fn subscription() -> iced::Subscription<()> {
+    iced::Subscription::run(|| {
+        let mut changes = LOG_CHANGED.subscribe();
+        iced::stream::channel(1, async move |mut output| {
+            // Catch writes between opening the tab and starting this subscription.
+            if output.send(()).await.is_err() {
+                return;
+            }
+            while changes.changed().await.is_ok() {
+                // Coalesce writes without polling when the log is idle.
+                tokio::time::sleep(LOG_REFRESH_INTERVAL).await;
+                changes.borrow_and_update();
+                if output.send(()).await.is_err() {
+                    break;
+                }
+            }
+        })
+    })
+}
 
 pub fn init(config_dir: &Path) -> Result<()> {
     fs::create_dir_all(config_dir)?;
@@ -65,10 +91,13 @@ struct SharedWriterGuard {
 
 impl Write for SharedWriterGuard {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.inner
+        let written = self
+            .inner
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .write(buf)
+            .write(buf)?;
+        let _ = LOG_CHANGED.send(());
+        Ok(written)
     }
 
     fn flush(&mut self) -> io::Result<()> {

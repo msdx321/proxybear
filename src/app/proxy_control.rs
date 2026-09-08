@@ -1,11 +1,9 @@
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
-use iced::futures::channel::mpsc;
 use tokio::{
     runtime::{Builder, Runtime},
     sync::oneshot,
-    task::JoinHandle,
 };
 
 use crate::{
@@ -14,14 +12,11 @@ use crate::{
 };
 
 use super::stats::ProxyStats;
-const PROXY_CHANNEL_SIZE: usize = 32;
 
 #[derive(Debug, Clone)]
 pub enum ProxyEvent {
     Done(Option<String>),
 }
-
-static PROXY_TX: Mutex<Option<mpsc::Sender<ProxyEvent>>> = Mutex::new(None);
 
 pub struct ProxyController {
     runtime: Runtime,
@@ -30,7 +25,6 @@ pub struct ProxyController {
 
 struct ProxyHandle {
     shutdown: Option<oneshot::Sender<()>>,
-    task: JoinHandle<()>,
 }
 
 impl ProxyController {
@@ -52,14 +46,8 @@ impl ProxyController {
         self.handle.is_some()
     }
 
-    pub fn reap_finished(&mut self) {
-        if self
-            .handle
-            .as_ref()
-            .is_some_and(|handle| handle.task.is_finished())
-        {
-            self.handle = None;
-        }
+    pub fn finish(&mut self) {
+        self.handle = None;
     }
 
     pub fn start(
@@ -67,9 +55,9 @@ impl ProxyController {
         config: Arc<Mutex<AppConfig>>,
         paths: AppPaths,
         stats: Arc<ProxyStats>,
-    ) -> Result<()> {
+    ) -> Result<iced::Task<ProxyEvent>> {
         if self.handle.is_some() {
-            return Ok(());
+            return Ok(iced::Task::none());
         }
 
         config
@@ -79,20 +67,16 @@ impl ProxyController {
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         stats.set_status("Starting");
         stats.clear_error();
-        let task = self.runtime.spawn(async move {
-            let result = proxy::run_proxy(config, paths, Arc::clone(&stats), shutdown_rx).await;
-            stats.set_status("Stopped");
-            if let Some(tx) = proxy_sender().as_mut() {
-                let _ = tx.try_send(ProxyEvent::Done(
-                    result.err().map(|error| error.to_string()),
-                ));
-            }
-        });
+        let task = self
+            .runtime
+            .spawn(proxy::run_proxy(config, paths, stats, shutdown_rx));
         self.handle = Some(ProxyHandle {
             shutdown: Some(shutdown_tx),
-            task,
         });
-        Ok(())
+        Ok(iced::Task::perform(
+            async move { task.await.context("proxy task failed")? },
+            |result| ProxyEvent::Done(result.err().map(|error| error.to_string())),
+        ))
     }
 
     pub fn stop(&mut self, stats: &ProxyStats) {
@@ -107,21 +91,4 @@ impl ProxyController {
             stats.set_status("Stopped");
         }
     }
-}
-
-#[derive(Hash)]
-struct ProxySubId;
-
-pub fn subscription() -> iced::Subscription<ProxyEvent> {
-    iced::Subscription::run_with(ProxySubId, |_: &ProxySubId| {
-        let (tx, rx) = mpsc::channel::<ProxyEvent>(PROXY_CHANNEL_SIZE);
-        *proxy_sender() = Some(tx);
-        rx
-    })
-}
-
-fn proxy_sender() -> MutexGuard<'static, Option<mpsc::Sender<ProxyEvent>>> {
-    PROXY_TX
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
