@@ -12,12 +12,25 @@ A native macOS menu-bar app that runs a local SOCKS5 proxy over SSH.
 
 ## Installation
 
-Download `ProxyBear.dmg` from the [latest release](https://github.com/msdx321/proxybear/releases/latest), open it, and drag ProxyBear to your Applications folder.
+### Homebrew
+
+```sh
+brew install --cask msdx321/tap/proxybear
+```
+
+The current release requires Apple Silicon and macOS 11 or later.
+Run `brew update` followed by `brew upgrade --cask msdx321/tap/proxybear` to update.
+
+### DMG
+
+1. Download `ProxyBear-<version>.dmg` from the [latest release](https://github.com/msdx321/proxybear/releases/latest) and open it.
+2. Drag **ProxyBear** onto the **Applications** shortcut in the installer window.
+3. Eject **Install ProxyBear**, then open **ProxyBear** from Applications. Look for the bear icon in the menu bar; the app has no Dock icon.
 
 > [!IMPORTANT]
 > Because ProxyBear is not notarized by Apple, macOS Gatekeeper may block it on first launch.
-> **Right-click** the app in Finder and choose **Open**, then click **Open** in the dialog.
-> Alternatively, run `xattr -cr /Applications/ProxyBear.app` in Terminal to clear the quarantine flag.
+> After trying to open it, go to **System Settings → Privacy & Security → Open Anyway** and confirm.
+> See [Apple's first-launch instructions](https://support.apple.com/en-us/102445).
 
 ### From source
 
