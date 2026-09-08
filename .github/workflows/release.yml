@@ -107,6 +107,9 @@ jobs:
             cargo install cargo-bundle --version 0.11.0 --locked
           fi
 
+      - name: Install uv for DMG packaging
+        uses: astral-sh/setup-uv@v10.0.1
+
       - name: Build app bundle
         run: |
           cargo bundle --release --format osx
@@ -114,7 +117,7 @@ jobs:
           test -d "$APP"
           plutil -lint "$APP/Contents/Info.plist"
 
-      - name: Ad-hoc code sign and repackage
+      - name: Ad-hoc code sign and build installation image
         run: |
           VERSION="${RELEASE_TAG#v}"
           APP="target/release/bundle/osx/ProxyBear.app"
@@ -124,10 +127,10 @@ jobs:
           codesign --force --deep --sign - "$APP"
           rm -rf target/release/bundle/dmg
           mkdir -p target/release/bundle/dmg
-          DMG_STAGING="$(mktemp -d)"
-          trap 'rm -rf "$DMG_STAGING"' EXIT
-          cp -R "$APP" "$DMG_STAGING/"
-          hdiutil create -volname ProxyBear -srcfolder "$DMG_STAGING" -ov -format UDZO "$DMG"
+          uvx --from dmgbuild==1.6.7 dmgbuild \
+            -s bundle/dmg-settings.py \
+            -D app="$APP" \
+            "Install ProxyBear" "$DMG"
           ditto -c -k --keepParent "$APP" "$APP_ZIP"
           (
             cd target/release/bundle
@@ -136,6 +139,19 @@ jobs:
           test -f "$APP_ZIP"
           test -f "$DMG"
           test -f target/release/bundle/SHA256SUMS
+
+      - name: Verify installation image
+        run: |
+          DMG="target/release/bundle/dmg/ProxyBear-${RELEASE_TAG#v}.dmg"
+          hdiutil verify "$DMG"
+          DMG_MOUNT="$(mktemp -d)"
+          trap 'hdiutil detach "$DMG_MOUNT" >/dev/null 2>&1 || true; rmdir "$DMG_MOUNT"' EXIT
+          hdiutil attach -readonly -nobrowse -noautoopen -mountpoint "$DMG_MOUNT" "$DMG"
+          test -d "$DMG_MOUNT/ProxyBear.app"
+          test "$(readlink "$DMG_MOUNT/Applications")" = /Applications
+          test -f "$DMG_MOUNT/.DS_Store"
+          test -f "$DMG_MOUNT/.background.tiff"
+          codesign --verify --deep --strict "$DMG_MOUNT/ProxyBear.app"
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v7
