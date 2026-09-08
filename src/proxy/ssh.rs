@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context, Result, bail};
 use russh::{
     client,
-    keys::{HashAlg, PrivateKeyWithHashAlg, load_secret_key, ssh_key},
+    keys::{HashAlg, PrivateKeyWithHashAlg, PublicKeyOrCertificate, load_secret_key},
 };
 
 use crate::config::{AppConfig, AppPaths, AuthMethod, save_config};
@@ -125,9 +125,12 @@ impl client::Handler for Client {
 
     async fn check_server_key(
         &mut self,
-        server_public_key: &ssh_key::PublicKey,
+        server_public_key: &PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
-        let fingerprint = server_public_key.fingerprint(HashAlg::Sha256).to_string();
+        let fingerprint = server_public_key
+            .public_key()
+            .fingerprint(HashAlg::Sha256)
+            .to_string();
         let mut config = self
             .config
             .lock()
