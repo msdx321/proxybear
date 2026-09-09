@@ -6,6 +6,7 @@ use gpui_component::{
     ActiveTheme,
     button::{Button, ButtonCustomVariant, ButtonVariants},
     input::{InputEvent, InputState},
+    v_flex,
 };
 
 use super::{SettingsField, SettingsTab};
@@ -143,9 +144,7 @@ impl Render for SettingsView {
         let app = self.app.read(cx);
         let active = app.active_tab;
         let stats = app.stats.snapshot();
-        div()
-            .flex()
-            .flex_col()
+        v_flex()
             .size_full()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
@@ -159,9 +158,7 @@ impl Render for SettingsView {
                     .border_b_1()
                     .border_color(cx.theme().border)
                     .child(
-                        div()
-                            .flex()
-                            .flex_col()
+                        v_flex()
                             .gap_1()
                             .child(
                                 div()
@@ -203,9 +200,7 @@ impl Render for SettingsView {
                     .flex_1()
                     .min_h_0()
                     .child(
-                        div()
-                            .flex()
-                            .flex_col()
+                        v_flex()
                             .w(px(156.))
                             .flex_shrink_0()
                             .p_3()
@@ -228,12 +223,10 @@ impl Render for SettingsView {
                                 cx,
                             )),
                     )
-                    .child(div().flex().flex_col().flex_1().min_w_0().min_h_0().child(
-                        match active {
-                            SettingsTab::Settings => self.settings(cx).into_any_element(),
-                            SettingsTab::Logs => self.logs(cx).into_any_element(),
-                        },
-                    )),
+                    .child(v_flex().flex_1().min_w_0().min_h_0().child(match active {
+                        SettingsTab::Settings => self.settings(cx).into_any_element(),
+                        SettingsTab::Logs => self.logs(cx).into_any_element(),
+                    })),
             )
             .child(
                 div()

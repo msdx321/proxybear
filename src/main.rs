@@ -39,6 +39,7 @@ struct ProxyBear {
     feedback: Option<String>,
     settings_window: Option<WindowHandle<Root>>,
     menu_open: bool,
+    stats_task: Option<gpui::Task<()>>,
 }
 
 impl ProxyBear {
@@ -70,6 +71,7 @@ impl ProxyBear {
             feedback: None,
             settings_window: None,
             menu_open: false,
+            stats_task: None,
         })
     }
 
@@ -89,13 +91,7 @@ impl ProxyBear {
         let mut stats = stats::subscribe();
         cx.spawn(async move |this, cx| {
             while stats.next().await.is_some() {
-                if this
-                    .update(cx, |this, cx| {
-                        this.refresh_stats();
-                        cx.notify();
-                    })
-                    .is_err()
-                {
+                if this.update(cx, Self::refresh_stats).is_err() {
                     break;
                 }
             }
@@ -120,26 +116,7 @@ impl ProxyBear {
             }
         })
         .detach();
-        cx.spawn(async move |this, cx| {
-            loop {
-                gpui::Timer::after(Duration::from_secs(5)).await;
-                if this
-                    .update(cx, |this, cx| {
-                        if this.proxy.is_running()
-                            && (this.settings_window.is_some() || this.menu_open)
-                        {
-                            this.refresh_stats();
-                            cx.notify();
-                        }
-                    })
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        })
-        .detach();
-        self.refresh_stats();
+        self.refresh_stats(cx);
         if self.config_snapshot().auto_connect {
             self.start_proxy(cx);
         }
@@ -147,14 +124,11 @@ impl ProxyBear {
 
     fn handle_menu(&mut self, action: MenuAction, cx: &mut gpui::Context<Self>) {
         match action {
-            MenuAction::MenuOpened => {
-                self.menu_open = true;
-                self.refresh_stats();
-            }
+            MenuAction::MenuOpened => self.menu_open = true,
             MenuAction::MenuClosed => self.menu_open = false,
             MenuAction::StartStop => {
                 if self.proxy.is_running() {
-                    self.stop_proxy();
+                    self.stop_proxy(cx);
                 } else {
                     self.start_proxy(cx);
                 }
@@ -177,12 +151,11 @@ impl ProxyBear {
                 }
             }
             MenuAction::Quit => {
-                self.stop_proxy();
+                self.stop_proxy(cx);
                 cx.quit();
             }
         }
-        self.refresh_stats();
-        cx.notify();
+        self.refresh_stats(cx);
     }
 
     fn handle_field(&mut self, field: SettingsField, cx: &mut gpui::Context<Self>) {
@@ -214,7 +187,7 @@ impl ProxyBear {
                     Err(error) => self.stats.set_error(error.to_string()),
                 }
             }
-            SettingsField::Stop => self.stop_proxy(),
+            SettingsField::Stop => self.stop_proxy(cx),
             SettingsField::ChooseKey => self.choose_key(),
             SettingsField::OpenLog => self.open_log(),
             SettingsField::RevealLog => self.reveal_log(),
@@ -225,8 +198,7 @@ impl ProxyBear {
                 }
             }
         }
-        self.refresh_stats();
-        cx.notify();
+        self.refresh_stats(cx);
     }
 
     fn open_settings(&mut self, cx: &mut gpui::Context<Self>) {
@@ -240,7 +212,7 @@ impl ProxyBear {
             }
             self.settings_window = None;
         }
-        self.refresh_stats();
+        self.refresh_stats(cx);
         self.log_tail.refresh();
         let app = cx.entity();
         // Defer construction so input initialization can read the app entity.
@@ -264,7 +236,7 @@ impl ProxyBear {
                     window.on_window_should_close(cx, move |_, cx| {
                         let _ = weak.update(cx, |app, cx| {
                             app.settings_window = None;
-                            cx.notify();
+                            app.refresh_stats(cx);
                         });
                         true
                     });
@@ -276,6 +248,7 @@ impl ProxyBear {
                 match result {
                     Ok(handle) => {
                         this.settings_window = Some(handle);
+                        this.refresh_stats(cx);
                         cx.activate(true);
                     }
                     Err(error) => this
@@ -289,7 +262,7 @@ impl ProxyBear {
 }
 
 impl ProxyBear {
-    fn refresh_stats(&mut self) {
+    fn refresh_stats(&mut self, cx: &mut gpui::Context<Self>) {
         let stats = self.stats.snapshot();
         let running = self.proxy.is_running();
         self.stats_text = presentation::settings_status(&stats);
@@ -297,6 +270,23 @@ impl ProxyBear {
 
         let config = self.config_snapshot();
         self.menu.update_tray(&self.tray, &config, &stats, running);
+        self.sync_stats_timer(cx);
+        cx.notify();
+    }
+
+    fn sync_stats_timer(&mut self, cx: &mut gpui::Context<Self>) {
+        if !self.proxy.is_running() || (self.settings_window.is_none() && !self.menu_open) {
+            self.stats_task = None;
+        } else if self.stats_task.is_none() {
+            self.stats_task = Some(cx.spawn(async move |this, cx| {
+                loop {
+                    gpui::Timer::after(Duration::from_secs(5)).await;
+                    if this.update(cx, |this, cx| this.refresh_stats(cx)).is_err() {
+                        break;
+                    }
+                }
+            }));
+        }
     }
 
     fn update_icon_for(&self, stats: &StatsSnapshot, running: bool) {
@@ -326,8 +316,7 @@ impl ProxyBear {
                         if let Err(error) = result {
                             this.stats.set_error(error.to_string());
                         }
-                        this.refresh_stats();
-                        cx.notify();
+                        this.refresh_stats(cx);
                     });
                 })
                 .detach();
@@ -335,12 +324,12 @@ impl ProxyBear {
             Ok(None) => {}
             Err(error) => self.stats.set_error(error.to_string()),
         }
-        self.refresh_stats();
+        self.refresh_stats(cx);
     }
 
-    fn stop_proxy(&mut self) {
+    fn stop_proxy(&mut self, cx: &mut gpui::Context<Self>) {
         self.proxy.stop(&self.stats);
-        self.refresh_stats();
+        self.refresh_stats(cx);
     }
 
     fn save_settings(&self) -> Result<()> {
@@ -405,7 +394,7 @@ fn main() {
                 let app = cx.new(|_| app);
                 app.update(cx, |app, cx| app.listen(cx));
                 cx.on_app_quit(move |cx| {
-                    app.update(cx, |app, _| app.stop_proxy());
+                    app.update(cx, |app, cx| app.stop_proxy(cx));
                     async {}
                 })
                 .detach();

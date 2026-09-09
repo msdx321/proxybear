@@ -5,19 +5,18 @@ use gpui_component::{
     ActiveTheme, Disableable,
     button::ButtonVariants,
     input::{Input, InputState},
+    v_flex,
 };
 
 impl SettingsView {
     pub(super) fn settings(&self, cx: &App) -> impl IntoElement {
         let app = self.app.read(cx);
         let form = &app.form;
-        let is_key = form.auth_method != AuthMethod::Password.as_str();
+        let is_key = form.auth_method == AuthMethod::Key;
         let running = app.proxy.is_running();
         let validation = form.save_error().or_else(|| form.start_error());
         let error = app.stats.snapshot().last_error;
-        let auth = div()
-            .flex()
-            .flex_col()
+        let auth = v_flex()
             .gap_3()
             .child(
                 div()
@@ -26,14 +25,14 @@ impl SettingsView {
                     .child(self.choice_button(
                         "auth-key",
                         "Private key",
-                        SettingsField::AuthMethod("key".into()),
+                        SettingsField::AuthMethod(AuthMethod::Key),
                         is_key,
                         cx,
                     ))
                     .child(self.choice_button(
                         "auth-password",
                         "Password",
-                        SettingsField::AuthMethod("password".into()),
+                        SettingsField::AuthMethod(AuthMethod::Password),
                         !is_key,
                         cx,
                     )),
@@ -52,9 +51,7 @@ impl SettingsView {
             .when(!is_key, |auth| {
                 auth.child(field("SSH password", &self.ssh_password))
             });
-        div()
-            .flex()
-            .flex_col()
+        v_flex()
             .size_full()
             .child(
                 div()
@@ -104,9 +101,7 @@ impl SettingsView {
                     ),
             )
             .child(
-                div()
-                    .flex()
-                    .flex_col()
+                v_flex()
                     .gap_2()
                     .p_4()
                     .border_t_1()
@@ -163,9 +158,7 @@ impl SettingsView {
 }
 
 fn field(label: &'static str, input: &Entity<InputState>) -> impl IntoElement {
-    div()
-        .flex()
-        .flex_col()
+    v_flex()
         .flex_1()
         .min_w_0()
         .gap_1()
@@ -174,9 +167,7 @@ fn field(label: &'static str, input: &Entity<InputState>) -> impl IntoElement {
 }
 
 fn panel(title: &'static str, description: &'static str, cx: &App) -> Div {
-    div()
-        .flex()
-        .flex_col()
+    v_flex()
         .flex_shrink_0()
         .gap_3()
         .p_4()
@@ -185,9 +176,7 @@ fn panel(title: &'static str, description: &'static str, cx: &App) -> Div {
         .border_color(cx.theme().border)
         .bg(cx.theme().secondary)
         .child(
-            div()
-                .flex()
-                .flex_col()
+            v_flex()
                 .gap_1()
                 .child(
                     div()

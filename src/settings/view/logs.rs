@@ -1,14 +1,12 @@
 use super::{SettingsField, SettingsView};
 use gpui::{prelude::*, *};
-use gpui_component::ActiveTheme;
+use gpui_component::{ActiveTheme, v_flex};
 
 impl SettingsView {
     pub(super) fn logs(&self, cx: &App) -> impl IntoElement {
         let app = self.app.read(cx);
         let logs = &app.log_tail;
-        div()
-            .flex()
-            .flex_col()
+        v_flex()
             .size_full()
             .p_5()
             .gap_3()

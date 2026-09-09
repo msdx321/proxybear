@@ -1,7 +1,6 @@
 mod log_tail;
 mod theme;
 mod view;
-pub use theme::init as init_theme;
 
 use std::net::SocketAddr;
 
@@ -10,6 +9,7 @@ use anyhow::{Context, Result, bail};
 use crate::config::{AppConfig, AuthMethod};
 
 pub use log_tail::LogTail;
+pub use theme::init as init_theme;
 pub use view::SettingsView;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -24,7 +24,7 @@ pub enum SettingsField {
     Server(String),
     Username(String),
     Port(String),
-    AuthMethod(String),
+    AuthMethod(AuthMethod),
     KeyPath(String),
     KeyPassword(String),
     SshPassword(String),
@@ -43,7 +43,7 @@ pub struct SettingsForm {
     pub server: String,
     pub username: String,
     pub port: String,
-    pub auth_method: String,
+    pub auth_method: AuthMethod,
     pub key_path: String,
     pub key_password: String,
     pub ssh_password: String,
@@ -56,7 +56,7 @@ impl SettingsForm {
             server: config.server.clone(),
             username: config.username.clone(),
             port: config.port.to_string(),
-            auth_method: config.auth_method().as_str().to_string(),
+            auth_method: config.auth_method(),
             key_path: config.key_path.clone(),
             key_password: config.key_password.clone(),
             ssh_password: config.ssh_password.clone(),
@@ -68,7 +68,7 @@ impl SettingsForm {
         config.server = self.server.trim().to_string();
         config.username = self.username.trim().to_string();
         config.port = self.parse_port()?;
-        config.set_auth_method(AuthMethod::from_config(&self.auth_method));
+        config.set_auth_method(self.auth_method);
         config.key_path = self.key_path.trim().to_string();
         config.key_password.clone_from(&self.key_password);
         config.ssh_password.clone_from(&self.ssh_password);
@@ -106,7 +106,7 @@ impl SettingsForm {
         if self.username.trim().is_empty() {
             bail!("username is empty");
         }
-        if self.auth_method != AuthMethod::Password.as_str() && self.key_path.trim().is_empty() {
+        if self.auth_method == AuthMethod::Key && self.key_path.trim().is_empty() {
             bail!("key path is empty");
         }
         Ok(())
