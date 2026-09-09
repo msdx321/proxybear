@@ -13,11 +13,6 @@ use crate::{
 
 use super::stats::ProxyStats;
 
-#[derive(Debug, Clone)]
-pub enum ProxyEvent {
-    Done(Option<String>),
-}
-
 pub struct ProxyController {
     runtime: Runtime,
     handle: Option<ProxyHandle>,
@@ -55,9 +50,9 @@ impl ProxyController {
         config: Arc<Mutex<AppConfig>>,
         paths: AppPaths,
         stats: Arc<ProxyStats>,
-    ) -> Result<iced::Task<ProxyEvent>> {
+    ) -> Result<Option<tokio::task::JoinHandle<Result<()>>>> {
         if self.handle.is_some() {
-            return Ok(iced::Task::none());
+            return Ok(None);
         }
 
         config
@@ -73,10 +68,7 @@ impl ProxyController {
         self.handle = Some(ProxyHandle {
             shutdown: Some(shutdown_tx),
         });
-        Ok(iced::Task::perform(
-            async move { task.await.context("proxy task failed")? },
-            |result| ProxyEvent::Done(result.err().map(|error| error.to_string())),
-        ))
+        Ok(Some(task))
     }
 
     pub fn stop(&mut self, stats: &ProxyStats) {

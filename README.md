@@ -8,7 +8,7 @@ A native macOS menu-bar app that runs a local SOCKS5 proxy over SSH.
 - **SOCKS5 over SSH**: tunnels your traffic through an SSH server
 - **No local authentication**: local proxy is unauthenticated, for use by local tools
 - **Launch at login**: optional LaunchAgent for autostart
-- **Settings UI**: configure server, authentication, and bind address in the settings window
+- **GPUI settings**: grouped connection settings, masked credentials, validation feedback, and live activity logs
 
 ## Installation
 

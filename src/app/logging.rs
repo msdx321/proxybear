@@ -3,38 +3,18 @@ use std::{
     io::{self, Write},
     path::{Path, PathBuf},
     sync::{Arc, LazyLock, Mutex},
-    time::Duration,
 };
 
 use anyhow::Result;
-use iced::futures::SinkExt;
 use tokio::sync::watch;
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 const LOG_MAX_SIZE: u64 = 1024 * 1024;
-const DEFAULT_LOG_FILTER: &str = "warn,proxybear=info,russh=warn,iced=warn,wgpu=warn,naga=warn";
-const LOG_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
-
+const DEFAULT_LOG_FILTER: &str = "warn,proxybear=info,russh=warn,gpui=warn";
 static LOG_CHANGED: LazyLock<watch::Sender<()>> = LazyLock::new(|| watch::channel(()).0);
 
-pub fn subscription() -> iced::Subscription<()> {
-    iced::Subscription::run(|| {
-        let mut changes = LOG_CHANGED.subscribe();
-        iced::stream::channel(1, async move |mut output| {
-            // Catch writes between opening the tab and starting this subscription.
-            if output.send(()).await.is_err() {
-                return;
-            }
-            while changes.changed().await.is_ok() {
-                // Coalesce writes without polling when the log is idle.
-                tokio::time::sleep(LOG_REFRESH_INTERVAL).await;
-                changes.borrow_and_update();
-                if output.send(()).await.is_err() {
-                    break;
-                }
-            }
-        })
-    })
+pub fn subscribe() -> watch::Receiver<()> {
+    LOG_CHANGED.subscribe()
 }
 
 pub fn init(config_dir: &Path) -> Result<()> {

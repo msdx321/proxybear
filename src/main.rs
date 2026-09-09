@@ -1,4 +1,3 @@
-// allow: SIZE_OK - main owns the Iced daemon state and message routing by user preference.
 mod app;
 mod config;
 mod proxy;
@@ -10,38 +9,20 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use iced::widget::operation::{RelativeOffset, snap_to};
+use futures::StreamExt;
+use gpui::{AppContext, Bounds, WindowBounds, WindowHandle, WindowOptions, px, size};
+use gpui_component::Root;
 use native_dialog::DialogBuilder;
 
 use app::{
     logging, platform, presentation,
     presentation::MenuPresenter,
-    proxy_control::{ProxyController, ProxyEvent},
-    stats::{self, ProxyStats, StatsEvent, StatsSnapshot},
+    proxy_control::ProxyController,
+    stats::{self, ProxyStats, StatsSnapshot},
     tray::{self, MenuAction, TrayMenu},
 };
 use config::{AppConfig, AppPaths, app_paths, load_config, save_config};
-use settings::{LOG_SCROLL_ID, LogTail, SettingsField, SettingsForm, SettingsTab};
-
-const SETTINGS_WINDOW_WIDTH: f32 = 520.0;
-const SETTINGS_WINDOW_HEIGHT: f32 = 640.0;
-const SETTINGS_STATS_INTERVAL: Duration = Duration::from_secs(5);
-
-fn snap_logs_to_latest() -> iced::Task<Message> {
-    snap_to(LOG_SCROLL_ID, RelativeOffset::START)
-}
-
-#[derive(Debug, Clone)]
-enum Message {
-    Field(SettingsField),
-    MenuAction(MenuAction),
-    AutoConnect,
-    Proxy(ProxyEvent),
-    Stats(StatsEvent),
-    Tick,
-    LogChanged,
-    Window(iced::window::Id, iced::window::Event),
-}
+use settings::{LogTail, SettingsField, SettingsForm, SettingsTab, SettingsView};
 
 struct ProxyBear {
     paths: AppPaths,
@@ -55,22 +36,13 @@ struct ProxyBear {
     log_tail: LogTail,
     stats_text: String,
     config_path: String,
-    settings_window: Option<iced::window::Id>,
+    feedback: Option<String>,
+    settings_window: Option<WindowHandle<Root>>,
     menu_open: bool,
 }
 
 impl ProxyBear {
-    fn new() -> (Self, iced::Task<Message>) {
-        match Self::try_new() {
-            Ok(app) => app,
-            Err(error) => {
-                eprintln!("ProxyBear failed to start: {error:?}");
-                std::process::exit(1);
-            }
-        }
-    }
-
-    fn try_new() -> Result<(Self, iced::Task<Message>)> {
+    fn new() -> Result<Self> {
         platform::activate_as_accessory();
         let paths = app_paths().context("app paths")?;
         logging::init(&paths.config_dir).context("open log file")?;
@@ -81,151 +53,145 @@ impl ProxyBear {
         let proxy = ProxyController::new().context("create proxy controller")?;
         let tray = TrayMenu::new(&paths, config.auto_connect).context("tray menu")?;
         let config_path = paths.config_path.display().to_string();
-        let auto_connect = config.auto_connect;
         let form = SettingsForm::from_config(&config);
         let log_tail = LogTail::new(paths.log_path());
-        let startup_task = if auto_connect {
-            iced::Task::done(Message::AutoConnect)
-        } else {
-            iced::Task::none()
-        };
-        Ok((
-            Self {
-                paths,
-                config: Arc::new(Mutex::new(config)),
-                stats,
-                proxy,
-                tray,
-                menu: MenuPresenter::default(),
-                form,
-                active_tab: SettingsTab::Settings,
-                log_tail,
-                stats_text: String::new(),
-                config_path,
-                settings_window: None,
-                menu_open: false,
-            },
-            startup_task,
-        ))
+        Ok(Self {
+            paths,
+            config: Arc::new(Mutex::new(config)),
+            stats,
+            proxy,
+            tray,
+            menu: MenuPresenter::default(),
+            form,
+            active_tab: SettingsTab::Settings,
+            log_tail,
+            stats_text: String::new(),
+            config_path,
+            feedback: None,
+            settings_window: None,
+            menu_open: false,
+        })
     }
 
-    fn update(&mut self, msg: Message) -> iced::Task<Message> {
-        match msg {
-            Message::Field(f) => self.handle_field(f),
-            Message::AutoConnect => self.start_proxy(),
-            Message::MenuAction(a) => self.handle_menu(a),
-            Message::Proxy(event) => self.handle_proxy_event(event),
-            Message::Stats(StatsEvent::Changed) => {
-                self.refresh_stats();
-                iced::Task::none()
-            }
-            Message::Tick => {
-                self.refresh_stats();
-                iced::Task::none()
-            }
-            Message::LogChanged => {
-                if self.settings_window.is_some()
-                    && self.active_tab == SettingsTab::Logs
-                    && self.log_tail.refresh() > 0
+    fn listen(&mut self, cx: &mut gpui::Context<Self>) {
+        let mut menus = tray::subscribe();
+        cx.spawn(async move |this, cx| {
+            while let Some(action) = menus.next().await {
+                if this
+                    .update(cx, |this, cx| this.handle_menu(action, cx))
+                    .is_err()
                 {
-                    return snap_logs_to_latest();
+                    break;
                 }
-                iced::Task::none()
             }
-            Message::Window(id, ev) => {
-                if matches!(ev, iced::window::Event::Closed) && self.settings_window == Some(id) {
-                    self.settings_window = None;
+        })
+        .detach();
+        let mut stats = stats::subscribe();
+        cx.spawn(async move |this, cx| {
+            while stats.next().await.is_some() {
+                if this
+                    .update(cx, |this, cx| {
+                        this.refresh_stats();
+                        cx.notify();
+                    })
+                    .is_err()
+                {
+                    break;
                 }
-                iced::Task::none()
             }
+        })
+        .detach();
+        let mut logs = logging::subscribe();
+        cx.spawn(async move |this, cx| {
+            while logs.changed().await.is_ok() {
+                gpui::Timer::after(Duration::from_secs(1)).await;
+                logs.borrow_and_update();
+                if this
+                    .update(cx, |this, cx| {
+                        if this.settings_window.is_some() && this.active_tab == SettingsTab::Logs {
+                            this.log_tail.refresh();
+                            cx.notify();
+                        }
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
+        cx.spawn(async move |this, cx| {
+            loop {
+                gpui::Timer::after(Duration::from_secs(5)).await;
+                if this
+                    .update(cx, |this, cx| {
+                        if this.proxy.is_running()
+                            && (this.settings_window.is_some() || this.menu_open)
+                        {
+                            this.refresh_stats();
+                            cx.notify();
+                        }
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
+        self.refresh_stats();
+        if self.config_snapshot().auto_connect {
+            self.start_proxy(cx);
         }
     }
 
-    fn view(&self, window: iced::window::Id) -> iced::Element<'_, Message> {
-        if Some(window) == self.settings_window {
-            return settings::view(
-                &self.form,
-                self.active_tab,
-                &self.log_tail,
-                &self.stats_text,
-                &self.config_path,
-            )
-            .map(Message::Field);
-        }
-        iced::widget::text("").into()
-    }
-
-    fn subscription(&self) -> iced::Subscription<Message> {
-        let mut subs: Vec<iced::Subscription<Message>> = vec![
-            tray::subscription().map(Message::MenuAction),
-            stats::subscription().map(Message::Stats),
-            iced::window::events().map(|(id, ev)| Message::Window(id, ev)),
-        ];
-        if self.proxy.is_running() && (self.settings_window.is_some() || self.menu_open) {
-            subs.push(iced::time::every(SETTINGS_STATS_INTERVAL).map(|_| Message::Tick));
-        }
-        if self.settings_window.is_some() && self.active_tab == SettingsTab::Logs {
-            subs.push(logging::subscription().map(|()| Message::LogChanged));
-        }
-        iced::Subscription::batch(subs)
-    }
-}
-
-impl ProxyBear {
-    fn handle_menu(&mut self, action: MenuAction) -> iced::Task<Message> {
+    fn handle_menu(&mut self, action: MenuAction, cx: &mut gpui::Context<Self>) {
         match action {
             MenuAction::MenuOpened => {
                 self.menu_open = true;
                 self.refresh_stats();
-                iced::Task::none()
             }
-            MenuAction::MenuClosed => {
-                self.menu_open = false;
-                iced::Task::none()
-            }
+            MenuAction::MenuClosed => self.menu_open = false,
             MenuAction::StartStop => {
                 if self.proxy.is_running() {
                     self.stop_proxy();
-                    iced::Task::none()
                 } else {
-                    self.start_proxy()
+                    self.start_proxy(cx);
                 }
             }
-            MenuAction::Settings => self.toggle_settings(),
+            MenuAction::Settings => self.open_settings(cx),
             MenuAction::ToggleAutostart => {
                 let mut config = self.config_snapshot();
                 config.autostart = !config.autostart;
-                self.tray.autostart.set_checked(config.autostart);
                 if let Err(error) = config::set_autostart(&self.paths, config.autostart)
                     .and_then(|()| self.save_config_state(config))
                 {
                     self.stats.set_error(error.to_string());
                 }
-                iced::Task::none()
             }
             MenuAction::ToggleAutoConnect => {
                 let mut config = self.config_snapshot();
                 config.auto_connect = !config.auto_connect;
-                self.tray.auto_connect.set_checked(config.auto_connect);
                 if let Err(error) = self.save_config_state(config) {
                     self.stats.set_error(error.to_string());
                 }
-                iced::Task::none()
             }
             MenuAction::Quit => {
                 self.stop_proxy();
-                std::process::exit(0);
+                cx.quit();
             }
         }
+        self.refresh_stats();
+        cx.notify();
     }
 
-    fn handle_field(&mut self, field: SettingsField) -> iced::Task<Message> {
+    fn handle_field(&mut self, field: SettingsField, cx: &mut gpui::Context<Self>) {
+        self.feedback = None;
         match field {
             SettingsField::Tab(tab) => {
                 self.active_tab = tab;
                 if tab == SettingsTab::Logs {
                     self.log_tail.refresh();
-                    return snap_logs_to_latest();
                 }
             }
             SettingsField::Server(v) => self.form.server = v,
@@ -236,66 +202,89 @@ impl ProxyBear {
             SettingsField::KeyPassword(v) => self.form.key_password = v,
             SettingsField::SshPassword(v) => self.form.ssh_password = v,
             SettingsField::LocalAddr(v) => self.form.local_addr = v,
-            SettingsField::Save => {
-                if let Err(error) = self.save_settings() {
-                    self.stats.set_error(error.to_string());
-                }
-            }
-            SettingsField::SaveAndStart => {
-                return match self.save_settings() {
-                    Ok(()) => self.start_proxy(),
-                    Err(error) => {
-                        self.stats.set_error(error.to_string());
-                        iced::Task::none()
+            SettingsField::Save | SettingsField::SaveAndStart => {
+                let start = matches!(field, SettingsField::SaveAndStart);
+                match self.save_settings() {
+                    Ok(()) => {
+                        self.feedback = Some("Settings saved".into());
+                        if start {
+                            self.start_proxy(cx);
+                        }
                     }
-                };
-            }
-            SettingsField::Stop => {
-                self.stop_proxy();
-            }
-            SettingsField::ChooseKey => {
-                if let Err(error) = self.save_settings() {
-                    self.stats.set_error(error.to_string());
+                    Err(error) => self.stats.set_error(error.to_string()),
                 }
-                self.choose_key();
             }
-            SettingsField::OpenLog => {
-                self.open_log();
-            }
-            SettingsField::RevealLog => {
-                self.reveal_log();
-            }
+            SettingsField::Stop => self.stop_proxy(),
+            SettingsField::ChooseKey => self.choose_key(),
+            SettingsField::OpenLog => self.open_log(),
+            SettingsField::RevealLog => self.reveal_log(),
             SettingsField::ClearLog => {
                 if let Err(error) = self.log_tail.clear() {
                     self.stats
                         .set_error(format!("failed to clear log: {error}"));
-                } else {
-                    tracing::debug!(event = "log_cleared", "Log cleared");
-                    return snap_logs_to_latest();
                 }
             }
         }
-        iced::Task::none()
+        self.refresh_stats();
+        cx.notify();
     }
 
-    fn toggle_settings(&mut self) -> iced::Task<Message> {
-        if self.settings_window.is_some() {
-            if let Some(id) = self.settings_window.take() {
-                return iced::window::close(id);
+    fn open_settings(&mut self, cx: &mut gpui::Context<Self>) {
+        if let Some(handle) = self.settings_window {
+            if handle
+                .update(cx, |_, window, _| window.activate_window())
+                .is_ok()
+            {
+                cx.activate(true);
+                return;
             }
-        } else {
-            let (id, open_task) = iced::window::open(iced::window::Settings {
-                size: iced::Size::new(SETTINGS_WINDOW_WIDTH, SETTINGS_WINDOW_HEIGHT),
-                ..Default::default()
-            });
-            self.settings_window = Some(id);
-            self.refresh_stats();
-            if self.active_tab == SettingsTab::Logs {
-                self.log_tail.refresh();
-            }
-            return open_task.then(iced::window::gain_focus);
+            self.settings_window = None;
         }
-        iced::Task::none()
+        self.refresh_stats();
+        self.log_tail.refresh();
+        let app = cx.entity();
+        // Defer construction so input initialization can read the app entity.
+        cx.defer(move |cx| {
+            let result = cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
+                        None,
+                        size(px(760.), px(780.)),
+                        cx,
+                    ))),
+                    window_min_size: Some(size(px(640.), px(600.))),
+                    titlebar: Some(gpui::TitlebarOptions {
+                        title: Some("ProxyBear Settings".into()),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                |window, cx| {
+                    let weak = app.downgrade();
+                    window.on_window_should_close(cx, move |_, cx| {
+                        let _ = weak.update(cx, |app, cx| {
+                            app.settings_window = None;
+                            cx.notify();
+                        });
+                        true
+                    });
+                    let view = cx.new(|cx| SettingsView::new(app.clone(), window, cx));
+                    cx.new(|cx| Root::new(view, window, cx))
+                },
+            );
+            app.update(cx, |this, cx| {
+                match result {
+                    Ok(handle) => {
+                        this.settings_window = Some(handle);
+                        cx.activate(true);
+                    }
+                    Err(error) => this
+                        .stats
+                        .set_error(format!("failed to open settings: {error}")),
+                }
+                cx.notify();
+            });
+        });
     }
 }
 
@@ -310,11 +299,6 @@ impl ProxyBear {
         self.menu.update_tray(&self.tray, &config, &stats, running);
     }
 
-    fn update_icon(&self) {
-        let stats = self.stats.snapshot();
-        self.update_icon_for(&stats, self.proxy.is_running());
-    }
-
     fn update_icon_for(&self, stats: &StatsSnapshot, running: bool) {
         let clean = stats.last_error.is_none() && stats.ssh_connected;
         let _ = self
@@ -324,39 +308,39 @@ impl ProxyBear {
 }
 
 impl ProxyBear {
-    fn start_proxy(&mut self) -> iced::Task<Message> {
-        let task = match self.proxy.start(
+    fn start_proxy(&mut self, cx: &mut gpui::Context<Self>) {
+        match self.proxy.start(
             Arc::clone(&self.config),
             self.paths.clone(),
             Arc::clone(&self.stats),
         ) {
-            Ok(task) => task.map(Message::Proxy),
-            Err(error) => {
-                self.stats.set_error(error.to_string());
-                iced::Task::none()
+            Ok(Some(task)) => {
+                cx.spawn(async move |this, cx| {
+                    let result = task
+                        .await
+                        .context("proxy task failed")
+                        .and_then(|result| result);
+                    let _ = this.update(cx, |this, cx| {
+                        this.proxy.finish();
+                        this.stats.set_status("Stopped");
+                        if let Err(error) = result {
+                            this.stats.set_error(error.to_string());
+                        }
+                        this.refresh_stats();
+                        cx.notify();
+                    });
+                })
+                .detach();
             }
-        };
-        self.update_icon();
-        task
+            Ok(None) => {}
+            Err(error) => self.stats.set_error(error.to_string()),
+        }
+        self.refresh_stats();
     }
 
     fn stop_proxy(&mut self) {
         self.proxy.stop(&self.stats);
-        self.update_icon();
-    }
-
-    fn handle_proxy_event(&mut self, event: ProxyEvent) -> iced::Task<Message> {
-        match event {
-            ProxyEvent::Done(error) => {
-                self.proxy.finish();
-                self.stats.set_status("Stopped");
-                if let Some(error) = error {
-                    self.stats.set_error(error);
-                }
-                self.refresh_stats();
-                iced::Task::none()
-            }
-        }
+        self.refresh_stats();
     }
 
     fn save_settings(&self) -> Result<()> {
@@ -383,7 +367,7 @@ impl ProxyBear {
     }
 
     fn choose_key(&mut self) {
-        let current = self.config_snapshot().key_path;
+        let current = self.form.key_path.clone();
         let mut builder = DialogBuilder::file().set_title("Choose SSH private key");
         if let Some(parent) = PathBuf::from(&current).parent().filter(|p| p.exists()) {
             builder = builder.set_location(parent);
@@ -412,9 +396,24 @@ impl ProxyBear {
     }
 }
 
-fn main() -> iced::Result {
-    iced::daemon(ProxyBear::new, ProxyBear::update, ProxyBear::view)
-        .title("ProxyBear")
-        .subscription(ProxyBear::subscription)
-        .run()
+fn main() {
+    gpui::Application::new().run(|cx| {
+        gpui_component::init(cx);
+        settings::init_theme(cx);
+        match ProxyBear::new() {
+            Ok(app) => {
+                let app = cx.new(|_| app);
+                app.update(cx, |app, cx| app.listen(cx));
+                cx.on_app_quit(move |cx| {
+                    app.update(cx, |app, _| app.stop_proxy());
+                    async {}
+                })
+                .detach();
+            }
+            Err(error) => {
+                eprintln!("ProxyBear failed to start: {error:#}");
+                cx.quit();
+            }
+        }
+    });
 }

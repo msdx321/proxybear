@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
-use iced::futures::channel::mpsc;
+use futures::channel::mpsc;
 
 const STATS_CHANNEL_SIZE: usize = 32;
 
@@ -89,15 +89,10 @@ impl ProxyStats {
     }
 }
 
-#[derive(Hash)]
-struct StatsSubId;
-
-pub fn subscription() -> iced::Subscription<StatsEvent> {
-    iced::Subscription::run_with(StatsSubId, |_: &StatsSubId| {
-        let (tx, rx) = mpsc::channel::<StatsEvent>(STATS_CHANNEL_SIZE);
-        *stats_sender() = Some(tx);
-        rx
-    })
+pub fn subscribe() -> mpsc::Receiver<StatsEvent> {
+    let (tx, rx) = mpsc::channel(STATS_CHANNEL_SIZE);
+    *stats_sender() = Some(tx);
+    rx
 }
 
 fn notify_changed() {

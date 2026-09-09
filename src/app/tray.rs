@@ -4,7 +4,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use iced::futures::channel::mpsc;
+use futures::channel::mpsc;
 use tray_icon::{
     TrayIcon, TrayIconBuilder,
     menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem},
@@ -59,15 +59,10 @@ define_class!(
     }
 );
 
-#[derive(Hash)]
-struct MenuSubId;
-
-pub fn subscription() -> iced::Subscription<MenuAction> {
-    iced::Subscription::run_with(MenuSubId, |_: &MenuSubId| {
-        let (tx, rx) = mpsc::channel::<MenuAction>(MENU_CHANNEL_SIZE);
-        *menu_sender() = Some(tx);
-        rx
-    })
+pub fn subscribe() -> mpsc::Receiver<MenuAction> {
+    let (tx, rx) = mpsc::channel(MENU_CHANNEL_SIZE);
+    *menu_sender() = Some(tx);
+    rx
 }
 
 pub struct TrayMenu {

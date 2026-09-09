@@ -1,5 +1,7 @@
 mod log_tail;
+mod theme;
 mod view;
+pub use theme::init as init_theme;
 
 use std::net::SocketAddr;
 
@@ -8,9 +10,7 @@ use anyhow::{Context, Result, bail};
 use crate::config::{AppConfig, AuthMethod};
 
 pub use log_tail::LogTail;
-pub use view::view;
-
-pub const LOG_SCROLL_ID: &str = "logs-scroll";
+pub use view::SettingsView;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum SettingsTab {

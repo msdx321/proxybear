@@ -1,180 +1,205 @@
-use iced::widget::text::Wrapping;
-use iced::widget::{Space, button, column, container, row, scrollable, text, text_input};
-use iced::{Alignment, Element, Length};
-
+use super::{SettingsField, SettingsView};
 use crate::config::AuthMethod;
+use gpui::{prelude::*, *};
+use gpui_component::{
+    ActiveTheme, Disableable,
+    button::ButtonVariants,
+    input::{Input, InputState},
+};
 
-use super::super::{SettingsField, SettingsForm};
-
-const INPUT_PADDING: u16 = 7;
-const LABEL_SIZE: u32 = 12;
-const SECTION_SIZE: u32 = 13;
-
-pub(super) fn body<'a>(form: &'a SettingsForm) -> Element<'a, SettingsField> {
-    let server_input = input("host.example.com", &form.server, SettingsField::Server);
-    let user_input = input("username", &form.username, SettingsField::Username);
-    let port_input = input("22", &form.port, SettingsField::Port).width(90);
-    let local_input = input("127.0.0.1:1080", &form.local_addr, SettingsField::LocalAddr);
-
-    let fields = column![
-        panel(
-            "Server",
-            column![
-                field("Host", server_input.into()),
-                row![
-                    field("Username", user_input.into()).width(Length::Fill),
-                    Space::new().width(10),
-                    field("Port", port_input.into()).width(104),
-                ]
-                .align_y(Alignment::End),
-            ]
-            .spacing(10)
-            .into(),
-        ),
-        panel("Authentication", auth_fields(form)),
-        panel(
-            "Local proxy",
-            field("SOCKS bind address", local_input.into()).into(),
-        ),
-    ]
-    .spacing(12);
-
-    scrollable(fields).height(Length::Fill).into()
-}
-
-pub(super) fn footer<'a>(
-    form: &'a SettingsForm,
-    config_path: &'a str,
-) -> Element<'a, SettingsField> {
-    let save = if form.can_save() {
-        button("Save").on_press(SettingsField::Save)
-    } else {
-        button("Save")
-    };
-    let save_and_start = if form.can_start() {
-        button("Save and Start")
-            .on_press(SettingsField::SaveAndStart)
-            .style(button::primary)
-    } else {
-        button("Save and Start").style(button::secondary)
-    };
-    let validation = form
-        .save_error()
-        .map(|error| format!("Save unavailable: {error}"))
-        .or_else(|| {
-            form.start_error()
-                .map(|error| format!("Save and Start unavailable: {error}"))
-        })
-        .map(|error| text(error).size(11).wrapping(Wrapping::Word))
-        .map(Element::from)
-        .unwrap_or_else(|| Space::new().height(0).into());
-
-    column![
-        row![
-            save,
-            save_and_start,
-            button("Stop").on_press(SettingsField::Stop),
-        ]
-        .spacing(8),
-        validation,
-        text(config_path).size(10).wrapping(Wrapping::Word),
-    ]
-    .spacing(8)
-    .into()
-}
-
-fn auth_fields<'a>(form: &'a SettingsForm) -> Element<'a, SettingsField> {
-    let is_key = form.auth_method != AuthMethod::Password.as_str();
-    let method_row = row![
-        button("Public Key")
-            .style(if is_key {
-                button::primary
-            } else {
-                button::secondary
+impl SettingsView {
+    pub(super) fn settings(&self, cx: &App) -> impl IntoElement {
+        let app = self.app.read(cx);
+        let form = &app.form;
+        let is_key = form.auth_method != AuthMethod::Password.as_str();
+        let running = app.proxy.is_running();
+        let validation = form.save_error().or_else(|| form.start_error());
+        let error = app.stats.snapshot().last_error;
+        let auth = div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .child(self.choice_button(
+                        "auth-key",
+                        "Private key",
+                        SettingsField::AuthMethod("key".into()),
+                        is_key,
+                        cx,
+                    ))
+                    .child(self.choice_button(
+                        "auth-password",
+                        "Password",
+                        SettingsField::AuthMethod("password".into()),
+                        !is_key,
+                        cx,
+                    )),
+            )
+            .when(is_key, |auth| {
+                auth.child(
+                    div()
+                        .flex()
+                        .items_end()
+                        .gap_2()
+                        .child(field("Private key file", &self.key_path))
+                        .child(self.button("choose-key", "Browse…", SettingsField::ChooseKey)),
+                )
+                .child(field("Key passphrase", &self.key_password))
             })
-            .on_press(SettingsField::AuthMethod(AuthMethod::Key.as_str().into())),
-        button("Password")
-            .style(if is_key {
-                button::secondary
-            } else {
-                button::primary
-            })
-            .on_press(SettingsField::AuthMethod(
-                AuthMethod::Password.as_str().into()
-            )),
-    ]
-    .spacing(8);
-
-    if form.auth_method == AuthMethod::Password.as_str() {
-        let password_input = input(
-            "SSH password",
-            &form.ssh_password,
-            SettingsField::SshPassword,
-        )
-        .secure(true);
-        column![method_row, field("Password", password_input.into())]
-            .spacing(10)
-            .into()
-    } else {
-        let key_input = input(
-            "/Users/me/.ssh/id_ed25519",
-            &form.key_path,
-            SettingsField::KeyPath,
-        );
-        let key_password_input = input(
-            "leave empty if none",
-            &form.key_password,
-            SettingsField::KeyPassword,
-        )
-        .secure(true);
-        column![
-            method_row,
-            column![
-                label("Private key"),
-                row![
-                    key_input.width(Length::Fill),
-                    Space::new().width(8),
-                    button("Choose...").on_press(SettingsField::ChooseKey),
-                ]
-                .align_y(Alignment::End),
-            ]
-            .spacing(4),
-            field("Key password", key_password_input.into()),
-        ]
-        .spacing(10)
-        .into()
+            .when(!is_key, |auth| {
+                auth.child(field("SSH password", &self.ssh_password))
+            });
+        div()
+            .flex()
+            .flex_col()
+            .size_full()
+            .child(
+                div()
+                    .id("settings-scroll")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .p_5()
+                    .gap_4()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        panel(
+                            "SSH server",
+                            "The remote server that carries your traffic.",
+                            cx,
+                        )
+                        .child(field("Hostname", &self.server))
+                        .child(
+                            div()
+                                .flex()
+                                .gap_3()
+                                .child(field("Username", &self.username))
+                                .child(
+                                    div()
+                                        .w(px(96.))
+                                        .flex_shrink_0()
+                                        .child(field("Port", &self.port)),
+                                ),
+                        ),
+                    )
+                    .child(
+                        panel(
+                            "Authentication",
+                            "Choose how to sign in to your server.",
+                            cx,
+                        )
+                        .child(auth),
+                    )
+                    .child(
+                        panel(
+                            "Local SOCKS5 proxy",
+                            "Use this address in your browser or other apps.",
+                            cx,
+                        )
+                        .child(field("Bind address", &self.local_addr)),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .p_4()
+                    .border_t_1()
+                    .border_color(cx.theme().border)
+                    .when_some(error, |footer, error| {
+                        footer.child(div().text_sm().text_color(cx.theme().danger).child(error))
+                    })
+                    .when_some(validation, |footer, error| {
+                        footer.child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(error),
+                        )
+                    })
+                    .when_some(app.feedback.clone(), |footer, feedback| {
+                        footer.child(div().text_sm().child(feedback))
+                    })
+                    .when(running, |footer| {
+                        footer.child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child("Stop the proxy before starting with new settings."),
+                        )
+                    })
+                    .child(
+                        div()
+                            .flex()
+                            .gap_2()
+                            .child(
+                                self.button("save", "Save", SettingsField::Save)
+                                    .disabled(!form.can_save()),
+                            )
+                            .child(
+                                self.button("start", "Save and Start", SettingsField::SaveAndStart)
+                                    .primary()
+                                    .disabled(!form.can_start() || running),
+                            )
+                            .child(
+                                self.button("stop", "Stop", SettingsField::Stop)
+                                    .disabled(!running),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .overflow_hidden()
+                            .child(app.config_path.clone()),
+                    ),
+            )
     }
 }
 
-fn panel<'a>(title: &'a str, content: Element<'a, SettingsField>) -> Element<'a, SettingsField> {
-    container(column![section(title), content].spacing(8))
-        .padding(12)
-        .width(Length::Fill)
-        .style(container::rounded_box)
-        .into()
+fn field(label: &'static str, input: &Entity<InputState>) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_w_0()
+        .gap_1()
+        .child(div().text_sm().child(label))
+        .child(Input::new(input))
 }
 
-fn field<'a>(
-    label_text: &'a str,
-    control: Element<'a, SettingsField>,
-) -> iced::widget::Column<'a, SettingsField> {
-    column![label(label_text), control].spacing(4)
-}
-
-fn input<'a>(
-    placeholder: &'a str,
-    value: &'a str,
-    on_input: impl Fn(String) -> SettingsField + 'a,
-) -> iced::widget::TextInput<'a, SettingsField> {
-    text_input(placeholder, value)
-        .on_input(on_input)
-        .padding(INPUT_PADDING)
-}
-
-fn label(value: &str) -> iced::widget::Text<'_> {
-    text(value).size(LABEL_SIZE)
-}
-
-fn section(value: &str) -> iced::widget::Text<'_> {
-    text(value).size(SECTION_SIZE)
+fn panel(title: &'static str, description: &'static str, cx: &App) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .flex_shrink_0()
+        .gap_3()
+        .p_4()
+        .rounded_lg()
+        .border_1()
+        .border_color(cx.theme().border)
+        .bg(cx.theme().secondary)
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(title),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(description),
+                ),
+        )
 }

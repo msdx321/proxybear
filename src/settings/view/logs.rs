@@ -1,77 +1,73 @@
-use iced::widget::text::Wrapping;
-use iced::widget::{Space, button, column, container, row, scrollable, text};
-use iced::{Alignment, Element, Font, Length};
+use super::{SettingsField, SettingsView};
+use gpui::{prelude::*, *};
+use gpui_component::ActiveTheme;
 
-use super::super::{LOG_SCROLL_ID, LogTail, SettingsField};
-
-const SECTION_SIZE: u32 = 13;
-
-pub(super) fn tab<'a>(logs: &'a LogTail) -> Element<'a, SettingsField> {
-    let mut lines = column![].spacing(3);
-    if logs.lines().is_empty() {
-        lines = lines.push(text("No log entries yet").size(13));
-    } else {
-        for line in logs.lines().iter().rev() {
-            lines = lines.push(
-                text(line)
-                    .size(12)
-                    .font(Font::MONOSPACE)
-                    .wrapping(Wrapping::Word),
-            );
-        }
+impl SettingsView {
+    pub(super) fn logs(&self, cx: &App) -> impl IntoElement {
+        let app = self.app.read(cx);
+        let logs = &app.log_tail;
+        div()
+            .flex()
+            .flex_col()
+            .size_full()
+            .p_5()
+            .gap_3()
+            .child(
+                div()
+                    .text_lg()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child("Activity logs"),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(format!("{} · newest first", logs.status())),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .child(self.button("open-log", "Open file", SettingsField::OpenLog))
+                    .child(self.button("reveal-log", "Show in Finder", SettingsField::RevealLog))
+                    .child(self.button("clear-log", "Clear", SettingsField::ClearLog)),
+            )
+            .when_some(logs.error(), |view, error| {
+                view.child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().danger)
+                        .child(error.to_owned()),
+                )
+            })
+            .child(
+                div()
+                    .id("logs-scroll")
+                    .track_scroll(&self.log_scroll)
+                    .overflow_y_scroll()
+                    .flex_1()
+                    .min_h_0()
+                    .p_3()
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .font_family("Menlo")
+                    .text_xs()
+                    .when(logs.lines().is_empty(), |view| {
+                        view.child("No log entries yet. Connection activity will appear here.")
+                    })
+                    .children(
+                        logs.lines()
+                            .iter()
+                            .rev()
+                            .map(|line| div().pb_2().child(line.clone())),
+                    ),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(logs.path_label().to_owned()),
+            )
     }
-
-    let error = logs
-        .error()
-        .map(|error| text(error).size(12))
-        .map(Element::from)
-        .unwrap_or_else(|| Space::new().height(0).into());
-
-    log_panel(
-        "Live logs",
-        column![
-            row![
-                text(logs.status()).size(12),
-                Space::new().width(Length::Fill),
-                text("proxybear.log").size(11),
-            ]
-            .align_y(Alignment::Center),
-            row![
-                button("Open").on_press(SettingsField::OpenLog),
-                button("Reveal").on_press(SettingsField::RevealLog),
-                button("Clear").on_press(SettingsField::ClearLog),
-            ]
-            .spacing(8),
-            text(logs.path_label()).size(10).wrapping(Wrapping::Word),
-            error,
-            container(scrollable(lines).id(LOG_SCROLL_ID).height(Length::Fill))
-                .padding(10)
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .style(container::rounded_box),
-        ]
-        .spacing(8)
-        .height(Length::Fill)
-        .into(),
-    )
-}
-
-fn log_panel<'a>(
-    title: &'a str,
-    content: Element<'a, SettingsField>,
-) -> Element<'a, SettingsField> {
-    container(
-        column![section(title), content]
-            .spacing(8)
-            .height(Length::Fill),
-    )
-    .padding(12)
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .style(container::rounded_box)
-    .into()
-}
-
-fn section(value: &str) -> iced::widget::Text<'_> {
-    text(value).size(SECTION_SIZE)
 }
