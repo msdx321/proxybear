@@ -23,10 +23,10 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  verify:
-    name: Verify release
+  build:
+    name: Verify and package
     runs-on: macos-26
-    timeout-minutes: 35
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
@@ -42,7 +42,7 @@ jobs:
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ${{ runner.os }}-${{ runner.arch }}-rust
+          shared-key: macos-rust
 
       - name: Validate release tag
         run: |
@@ -67,33 +67,8 @@ jobs:
       - name: Run clippy
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
-      - name: Run tests
-        run: cargo test --locked --all-targets --all-features
-
-      - name: Build release binary
-        run: cargo build --locked --release --all-features
-
-  package:
-    name: Package and release
-    needs: verify
-    runs-on: macos-26
-    timeout-minutes: 45
-    permissions:
-      contents: write
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ env.RELEASE_TAG }}
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Restore Rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: ${{ runner.os }}-${{ runner.arch }}-rust
+      - name: Run release tests
+        run: cargo test --locked --release --all-targets --all-features
 
       - name: Restore cargo-bundle cache
         uses: actions/cache@v4
@@ -112,7 +87,7 @@ jobs:
 
       - name: Build app bundle
         run: |
-          cargo bundle --release --format osx
+          cargo bundle --release --all-features --format osx
           APP="target/release/bundle/osx/ProxyBear.app"
           test -d "$APP"
           plutil -lint "$APP/Contents/Info.plist"
@@ -163,13 +138,28 @@ jobs:
             target/release/bundle/SHA256SUMS
           if-no-files-found: error
 
+  publish:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download verified artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: ProxyBear-${{ env.RELEASE_TAG }}-release-artifacts
+          path: release
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           files: |
-            target/release/bundle/ProxyBear-*.app.zip
-            target/release/bundle/dmg/ProxyBear-*.dmg
-            target/release/bundle/SHA256SUMS
+            release/ProxyBear-*.app.zip
+            release/dmg/ProxyBear-*.dmg
+            release/SHA256SUMS
           generate_release_notes: true
           fail_on_unmatched_files: true
