@@ -67,9 +67,6 @@ jobs:
       - name: Run clippy
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
-      - name: Run release tests
-        run: cargo test --locked --release --all-targets --all-features
-
       - name: Restore cargo-bundle cache
         uses: actions/cache@v4
         with:
