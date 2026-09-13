@@ -5834,7 +5834,7 @@ dependencies = [
 
 [[package]]
 name = "proxybear"
-version = "0.4.1"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "auto-launch",
