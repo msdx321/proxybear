@@ -6,7 +6,7 @@ use std::net::SocketAddr;
 
 use anyhow::{Context, Result, bail};
 
-use crate::config::{AppConfig, AuthMethod};
+use crate::config::{AppConfig, AuthMethod, LogLevel};
 
 pub use log_tail::LogTail;
 pub use theme::init as init_theme;
@@ -21,6 +21,7 @@ pub enum SettingsTab {
 #[derive(Debug, Clone)]
 pub enum SettingsField {
     Tab(SettingsTab),
+    LogLevel(LogLevel),
     Server(String),
     Username(String),
     Port(String),

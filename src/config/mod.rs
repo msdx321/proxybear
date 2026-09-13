@@ -67,6 +67,31 @@ pub struct RuntimeConfig {
     pub ssh: SshConnectConfig,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LogLevel {
+    #[default]
+    Error,
+    Warn,
+    Info,
+    Debug,
+    Trace,
+}
+
+impl LogLevel {
+    pub fn filter(self) -> tracing_subscriber::filter::LevelFilter {
+        use tracing_subscriber::filter::LevelFilter;
+
+        match self {
+            Self::Error => LevelFilter::ERROR,
+            Self::Warn => LevelFilter::WARN,
+            Self::Info => LevelFilter::INFO,
+            Self::Debug => LevelFilter::DEBUG,
+            Self::Trace => LevelFilter::TRACE,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AppConfig {
     pub server: String,
@@ -84,6 +109,8 @@ pub struct AppConfig {
     pub autostart: bool,
     #[serde(default)]
     pub auto_connect: bool,
+    #[serde(default)]
+    pub log_level: LogLevel,
     pub host_fingerprint: Option<String>,
 }
 
@@ -100,6 +127,7 @@ impl Default for AppConfig {
             local_addr: "127.0.0.1:1080".to_string(),
             autostart: false,
             auto_connect: false,
+            log_level: LogLevel::default(),
             host_fingerprint: None,
         }
     }

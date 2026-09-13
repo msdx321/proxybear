@@ -7,30 +7,34 @@ use std::{
 
 use anyhow::Result;
 use tokio::sync::watch;
-use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{
+    Registry, filter::LevelFilter, fmt, layer::SubscriberExt, reload, util::SubscriberInitExt,
+};
+
+use crate::config::LogLevel;
+
+pub type LogFilter = reload::Handle<LevelFilter, Registry>;
 
 const LOG_MAX_SIZE: u64 = 1024 * 1024;
-const DEFAULT_LOG_FILTER: &str = "warn,proxybear=info,russh=warn,gpui=warn";
 static LOG_CHANGED: LazyLock<watch::Sender<()>> = LazyLock::new(|| watch::channel(()).0);
 
 pub fn subscribe() -> watch::Receiver<()> {
     LOG_CHANGED.subscribe()
 }
 
-pub fn init(config_dir: &Path) -> Result<()> {
+pub fn init(config_dir: &Path, level: LogLevel) -> Result<LogFilter> {
     fs::create_dir_all(config_dir)?;
     let log_writer = SharedWriter::new(RotatingWriter::new(
         config_dir.join("proxybear.log"),
         LOG_MAX_SIZE,
     )?);
-    let filter =
-        EnvFilter::try_from_default_env().or_else(|_| EnvFilter::try_new(DEFAULT_LOG_FILTER))?;
+    let (filter, handle) = reload::Layer::new(level.filter());
 
     tracing_subscriber::registry()
         .with(filter)
         .with(fmt::layer().with_ansi(false).with_writer(log_writer))
         .try_init()?;
-    Ok(())
+    Ok(handle)
 }
 
 /// A file writer that rotates to `.old.log` when it exceeds `max_size` bytes,

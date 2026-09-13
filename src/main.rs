@@ -34,6 +34,7 @@ struct ProxyBear {
     form: SettingsForm,
     active_tab: SettingsTab,
     log_tail: LogTail,
+    log_filter: logging::LogFilter,
     stats_text: String,
     config_path: String,
     feedback: Option<String>,
@@ -46,9 +47,10 @@ impl ProxyBear {
     fn new() -> Result<Self> {
         platform::activate_as_accessory();
         let paths = app_paths().context("app paths")?;
-        logging::init(&paths.config_dir).context("open log file")?;
-        tracing::info!(event = "app_started", "ProxyBear starting");
         let config = load_config(&paths).context("load config")?;
+        let log_filter =
+            logging::init(&paths.config_dir, config.log_level).context("initialize logging")?;
+        tracing::info!(event = "app_started", "ProxyBear starting");
         let stats = Arc::new(ProxyStats::default());
         stats.set_status("Stopped");
         let proxy = ProxyController::new().context("create proxy controller")?;
@@ -66,6 +68,7 @@ impl ProxyBear {
             form,
             active_tab: SettingsTab::Settings,
             log_tail,
+            log_filter,
             stats_text: String::new(),
             config_path,
             feedback: None,
@@ -165,6 +168,17 @@ impl ProxyBear {
                 self.active_tab = tab;
                 if tab == SettingsTab::Logs {
                     self.log_tail.refresh();
+                }
+            }
+            SettingsField::LogLevel(level) => {
+                let mut config = self.config_snapshot();
+                config.log_level = level;
+                if let Err(error) = self.save_config_state(config).and_then(|()| {
+                    self.log_filter
+                        .reload(level.filter())
+                        .context("update log level")
+                }) {
+                    self.feedback = Some(format!("Could not change log level: {error}"));
                 }
             }
             SettingsField::Server(v) => self.form.server = v,
