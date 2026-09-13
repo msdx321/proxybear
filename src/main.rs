@@ -100,7 +100,7 @@ impl ProxyBear {
         let mut logs = logging::subscribe();
         cx.spawn(async move |this, cx| {
             while logs.changed().await.is_ok() {
-                gpui::Timer::after(Duration::from_secs(1)).await;
+                cx.background_executor().timer(Duration::from_secs(1)).await;
                 logs.borrow_and_update();
                 if this
                     .update(cx, |this, cx| {
@@ -280,7 +280,7 @@ impl ProxyBear {
         } else if self.stats_task.is_none() {
             self.stats_task = Some(cx.spawn(async move |this, cx| {
                 loop {
-                    gpui::Timer::after(Duration::from_secs(5)).await;
+                    cx.background_executor().timer(Duration::from_secs(5)).await;
                     if this.update(cx, |this, cx| this.refresh_stats(cx)).is_err() {
                         break;
                     }
@@ -386,7 +386,7 @@ impl ProxyBear {
 }
 
 fn main() {
-    gpui::Application::new().run(|cx| {
+    gpui_platform::application().run(|cx| {
         gpui_component::init(cx);
         settings::init_theme(cx);
         match ProxyBear::new() {

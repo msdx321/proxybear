@@ -107,7 +107,6 @@ impl SettingsView {
                     ButtonCustomVariant::new(cx)
                         .color(cx.theme().primary)
                         .foreground(cx.theme().primary_foreground)
-                        .border(cx.theme().primary_hover)
                         .hover(cx.theme().primary_hover)
                         .active(cx.theme().primary_active)
                         .shadow(true),
