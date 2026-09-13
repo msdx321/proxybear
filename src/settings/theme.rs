@@ -24,6 +24,9 @@ pub fn init(cx: &mut App) {
         colors.secondary_hover = color("#34343B", "#F4F4F5");
         colors.border = color("#36363E", "#E4E4E7");
         colors.input = color("#45454F", "#D4D4D8");
+        colors.button = color("#27272C", "#E8E9ED");
+        colors.button_hover = color("#34343B", "#DDDFE4");
+        colors.button_active = color("#3F3F47", "#D1D4DB");
         colors.primary = color("#2563EB", "#2563EB");
         colors.primary_foreground = color("#FFFFFF", "#FFFFFF");
         colors.primary_hover = color("#3B82F6", "#1D4ED8");

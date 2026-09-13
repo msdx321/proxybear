@@ -100,20 +100,16 @@ impl SettingsView {
         active: bool,
         cx: &App,
     ) -> Button {
-        self.button(id, label, field).when_else(
-            active,
-            |button| {
-                button.custom(
-                    ButtonCustomVariant::new(cx)
-                        .color(cx.theme().primary)
-                        .foreground(cx.theme().primary_foreground)
-                        .hover(cx.theme().primary_hover)
-                        .active(cx.theme().primary_active)
-                        .shadow(true),
-                )
-            },
-            |button| button.ghost(),
-        )
+        self.button(id, label, field).when(active, |button| {
+            button.custom(
+                ButtonCustomVariant::new(cx)
+                    .color(cx.theme().primary)
+                    .foreground(cx.theme().primary_foreground)
+                    .hover(cx.theme().primary_hover)
+                    .active(cx.theme().primary_active)
+                    .shadow(true),
+            )
+        })
     }
 
     fn button(&self, id: &'static str, label: &'static str, field: SettingsField) -> Button {
