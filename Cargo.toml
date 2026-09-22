@@ -26,6 +26,10 @@ tray-icon = { version = "0.25.0", default-features = false }
 [build-dependencies]
 resvg = { version = "0.48.1", default-features = false }
 
+[profile.release]
+lto = "thin"
+strip = "symbols"
+
 [package.metadata.bundle]
 name = "ProxyBear"
 identifier = "com.msdx321.proxybear"
