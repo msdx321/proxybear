@@ -7,11 +7,6 @@ use futures::channel::mpsc;
 
 const STATS_CHANNEL_SIZE: usize = 32;
 
-#[derive(Debug, Clone)]
-pub enum StatsEvent {
-    Changed,
-}
-
 #[derive(Default)]
 pub struct ProxyStats {
     ssh_connected: AtomicBool,
@@ -21,7 +16,7 @@ pub struct ProxyStats {
     last_error: Mutex<Option<String>>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct StatsSnapshot {
     pub ssh_connected: bool,
     pub bytes_up: u64,
@@ -30,7 +25,7 @@ pub struct StatsSnapshot {
     pub last_error: Option<String>,
 }
 
-static STATS_TX: Mutex<Option<mpsc::Sender<StatsEvent>>> = Mutex::new(None);
+static STATS_TX: Mutex<Option<mpsc::Sender<()>>> = Mutex::new(None);
 
 impl ProxyStats {
     pub fn set_status(&self, status: impl Into<String>) {
@@ -89,7 +84,7 @@ impl ProxyStats {
     }
 }
 
-pub fn subscribe() -> mpsc::Receiver<StatsEvent> {
+pub fn subscribe() -> mpsc::Receiver<()> {
     let (tx, rx) = mpsc::channel(STATS_CHANNEL_SIZE);
     *stats_sender() = Some(tx);
     rx
@@ -97,14 +92,12 @@ pub fn subscribe() -> mpsc::Receiver<StatsEvent> {
 
 fn notify_changed() {
     if let Some(tx) = stats_sender().as_mut() {
-        let _ = tx.try_send(StatsEvent::Changed);
+        let _ = tx.try_send(());
     }
 }
 
-fn stats_sender() -> MutexGuard<'static, Option<mpsc::Sender<StatsEvent>>> {
-    STATS_TX
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+fn stats_sender() -> MutexGuard<'static, Option<mpsc::Sender<()>>> {
+    lock(&STATS_TX)
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {

@@ -3,8 +3,8 @@ mod settings_tab;
 
 use gpui::{prelude::*, *};
 use gpui_component::{
-    ActiveTheme,
-    button::{Button, ButtonCustomVariant, ButtonVariants},
+    ActiveTheme, Selectable,
+    button::{Button, ButtonVariants},
     input::{InputEvent, InputState},
     v_flex,
 };
@@ -98,18 +98,11 @@ impl SettingsView {
         label: &'static str,
         field: SettingsField,
         active: bool,
-        cx: &App,
     ) -> Button {
-        self.button(id, label, field).when(active, |button| {
-            button.custom(
-                ButtonCustomVariant::new(cx)
-                    .color(cx.theme().primary)
-                    .foreground(cx.theme().primary_foreground)
-                    .hover(cx.theme().primary_hover)
-                    .active(cx.theme().primary_active)
-                    .shadow(true),
-            )
-        })
+        self.button(id, label, field)
+            .selected(active)
+            .toggled(active)
+            .when(active, |button| button.primary())
     }
 
     fn button(&self, id: &'static str, label: &'static str, field: SettingsField) -> Button {
@@ -138,7 +131,7 @@ impl Render for SettingsView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let app = self.app.read(cx);
         let active = app.active_tab;
-        let stats = app.stats.snapshot();
+        let stats = &app.stats_snapshot;
         v_flex()
             .size_full()
             .bg(cx.theme().background)
@@ -148,12 +141,15 @@ impl Render for SettingsView {
                     .flex()
                     .items_center()
                     .justify_between()
+                    .flex_shrink_0()
+                    .gap_4()
                     .px_6()
                     .py_4()
                     .border_b_1()
                     .border_color(cx.theme().border)
                     .child(
                         v_flex()
+                            .min_w_0()
                             .gap_1()
                             .child(
                                 div()
@@ -171,6 +167,9 @@ impl Render for SettingsView {
                     .child(
                         div()
                             .rounded_full()
+                            .flex_shrink_0()
+                            .max_w(px(240.))
+                            .truncate()
                             .px_3()
                             .py_1()
                             .text_sm()
@@ -203,20 +202,26 @@ impl Render for SettingsView {
                             .bg(cx.theme().muted)
                             .border_r_1()
                             .border_color(cx.theme().border)
-                            .child(self.choice_button(
-                                "settings",
-                                "Connection",
-                                SettingsField::Tab(SettingsTab::Settings),
-                                active == SettingsTab::Settings,
-                                cx,
-                            ))
-                            .child(self.choice_button(
-                                "logs",
-                                "Activity logs",
-                                SettingsField::Tab(SettingsTab::Logs),
-                                active == SettingsTab::Logs,
-                                cx,
-                            )),
+                            .child(
+                                self.choice_button(
+                                    "settings",
+                                    "Connection",
+                                    SettingsField::Tab(SettingsTab::Settings),
+                                    active == SettingsTab::Settings,
+                                )
+                                .w_full()
+                                .justify_start(),
+                            )
+                            .child(
+                                self.choice_button(
+                                    "logs",
+                                    "Activity logs",
+                                    SettingsField::Tab(SettingsTab::Logs),
+                                    active == SettingsTab::Logs,
+                                )
+                                .w_full()
+                                .justify_start(),
+                            ),
                     )
                     .child(v_flex().flex_1().min_w_0().min_h_0().child(match active {
                         SettingsTab::Settings => self.settings(cx).into_any_element(),
@@ -224,14 +229,19 @@ impl Render for SettingsView {
                     })),
             )
             .child(
-                div()
+                v_flex()
+                    .flex_shrink_0()
+                    .gap_1()
                     .px_6()
-                    .py_2()
+                    .py_3()
                     .border_t_1()
                     .border_color(cx.theme().border)
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .child(app.stats_text.clone()),
+                    .child(crate::app::presentation::settings_status(stats))
+                    .when_some(stats.last_error.clone(), |footer, error| {
+                        footer.child(div().text_color(cx.theme().danger).child(error))
+                    }),
             )
     }
 }

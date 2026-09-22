@@ -2,7 +2,7 @@ use std::{
     fs,
     io::{self, Write},
     path::{Path, PathBuf},
-    sync::{Arc, LazyLock, Mutex},
+    sync::{LazyLock, Mutex, MutexGuard},
 };
 
 use anyhow::Result;
@@ -24,10 +24,10 @@ pub fn subscribe() -> watch::Receiver<()> {
 
 pub fn init(config_dir: &Path, level: LogLevel) -> Result<LogFilter> {
     fs::create_dir_all(config_dir)?;
-    let log_writer = SharedWriter::new(RotatingWriter::new(
+    let log_writer = SharedWriter(Mutex::new(RotatingWriter::new(
         config_dir.join("proxybear.log"),
         LOG_MAX_SIZE,
-    )?);
+    )?));
     let (filter, handle) = reload::Layer::new(level.filter());
 
     tracing_subscriber::registry()
@@ -46,49 +46,27 @@ struct RotatingWriter {
     max_size: u64,
 }
 
-#[derive(Clone)]
-struct SharedWriter {
-    inner: Arc<Mutex<RotatingWriter>>,
-}
-
-impl SharedWriter {
-    fn new(writer: RotatingWriter) -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(writer)),
-        }
-    }
-}
+struct SharedWriter(Mutex<RotatingWriter>);
 
 impl<'a> fmt::MakeWriter<'a> for SharedWriter {
-    type Writer = SharedWriterGuard;
+    type Writer = SharedWriterGuard<'a>;
 
     fn make_writer(&'a self) -> Self::Writer {
-        SharedWriterGuard {
-            inner: Arc::clone(&self.inner),
-        }
+        SharedWriterGuard(self.0.lock().unwrap_or_else(|e| e.into_inner()))
     }
 }
 
-struct SharedWriterGuard {
-    inner: Arc<Mutex<RotatingWriter>>,
-}
+struct SharedWriterGuard<'a>(MutexGuard<'a, RotatingWriter>);
 
-impl Write for SharedWriterGuard {
+impl Write for SharedWriterGuard<'_> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let written = self
-            .inner
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .write(buf)?;
+        let written = self.0.write(buf)?;
         let _ = LOG_CHANGED.send(());
         Ok(written)
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        self.inner
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .flush()
+        self.0.flush()
     }
 }
 

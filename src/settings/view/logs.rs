@@ -1,13 +1,13 @@
 use super::{SettingsField, SettingsView};
 use crate::config::LogLevel;
 use gpui::{prelude::*, *};
-use gpui_component::{ActiveTheme, v_flex};
+use gpui_component::{ActiveTheme, button::ButtonVariants, v_flex};
 
 impl SettingsView {
     pub(super) fn logs(&self, cx: &App) -> impl IntoElement {
         let app = self.app.read(cx);
         let logs = &app.log_tail;
-        let log_level = app.config_snapshot().log_level;
+        let log_level = app.config().log_level;
         v_flex()
             .size_full()
             .p_5()
@@ -44,7 +44,6 @@ impl SettingsView {
                                     label,
                                     SettingsField::LogLevel(level),
                                     log_level == level,
-                                    cx,
                                 )
                             }),
                         ),
@@ -62,10 +61,15 @@ impl SettingsView {
             .child(
                 div()
                     .flex()
+                    .flex_wrap()
                     .gap_2()
                     .child(self.button("open-log", "Open file", SettingsField::OpenLog))
                     .child(self.button("reveal-log", "Show in Finder", SettingsField::RevealLog))
-                    .child(self.button("clear-log", "Clear", SettingsField::ClearLog)),
+                    .child(
+                        self.button("clear-log", "Clear", SettingsField::ClearLog)
+                            .danger()
+                            .outline(),
+                    ),
             )
             .when_some(logs.error(), |view, error| {
                 view.child(
@@ -86,6 +90,7 @@ impl SettingsView {
                     .rounded_lg()
                     .border_1()
                     .border_color(cx.theme().border)
+                    .bg(cx.theme().secondary)
                     .font_family("Menlo")
                     .text_xs()
                     .when(logs.lines().is_empty(), |view| {
@@ -102,6 +107,7 @@ impl SettingsView {
                 div()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
+                    .truncate()
                     .child(logs.path_label().to_owned()),
             )
     }

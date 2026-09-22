@@ -5,7 +5,7 @@ mod settings;
 
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -35,12 +35,13 @@ struct ProxyBear {
     active_tab: SettingsTab,
     log_tail: LogTail,
     log_filter: logging::LogFilter,
-    stats_text: String,
+    stats_snapshot: StatsSnapshot,
     config_path: String,
     feedback: Option<String>,
     settings_window: Option<WindowHandle<Root>>,
     menu_open: bool,
     stats_task: Option<gpui::Task<()>>,
+    log_task: Option<gpui::Task<()>>,
 }
 
 impl ProxyBear {
@@ -69,12 +70,13 @@ impl ProxyBear {
             active_tab: SettingsTab::Settings,
             log_tail,
             log_filter,
-            stats_text: String::new(),
+            stats_snapshot: StatsSnapshot::default(),
             config_path,
             feedback: None,
             settings_window: None,
             menu_open: false,
             stats_task: None,
+            log_task: None,
         })
     }
 
@@ -100,27 +102,9 @@ impl ProxyBear {
             }
         })
         .detach();
-        let mut logs = logging::subscribe();
-        cx.spawn(async move |this, cx| {
-            while logs.changed().await.is_ok() {
-                cx.background_executor().timer(Duration::from_secs(1)).await;
-                logs.borrow_and_update();
-                if this
-                    .update(cx, |this, cx| {
-                        if this.settings_window.is_some() && this.active_tab == SettingsTab::Logs {
-                            this.log_tail.refresh();
-                            cx.notify();
-                        }
-                    })
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        })
-        .detach();
         self.refresh_stats(cx);
-        if self.config_snapshot().auto_connect {
+        let auto_connect = self.config().auto_connect;
+        if auto_connect {
             self.start_proxy(cx);
         }
     }
@@ -138,7 +122,7 @@ impl ProxyBear {
             }
             MenuAction::Settings => self.open_settings(cx),
             MenuAction::ToggleAutostart => {
-                let mut config = self.config_snapshot();
+                let mut config = self.config().clone();
                 config.autostart = !config.autostart;
                 if let Err(error) = config::set_autostart(&self.paths, config.autostart)
                     .and_then(|()| self.save_config_state(config))
@@ -147,7 +131,7 @@ impl ProxyBear {
                 }
             }
             MenuAction::ToggleAutoConnect => {
-                let mut config = self.config_snapshot();
+                let mut config = self.config().clone();
                 config.auto_connect = !config.auto_connect;
                 if let Err(error) = self.save_config_state(config) {
                     self.stats.set_error(error.to_string());
@@ -166,12 +150,13 @@ impl ProxyBear {
         match field {
             SettingsField::Tab(tab) => {
                 self.active_tab = tab;
+                self.sync_refresh_tasks(cx);
                 if tab == SettingsTab::Logs {
                     self.log_tail.refresh();
                 }
             }
             SettingsField::LogLevel(level) => {
-                let mut config = self.config_snapshot();
+                let mut config = self.config().clone();
                 config.log_level = level;
                 if let Err(error) = self.save_config_state(config).and_then(|()| {
                     self.log_filter
@@ -200,6 +185,7 @@ impl ProxyBear {
                     }
                     Err(error) => self.stats.set_error(error.to_string()),
                 }
+                self.refresh_stats(cx);
             }
             SettingsField::Stop => self.stop_proxy(cx),
             SettingsField::ChooseKey => self.choose_key(),
@@ -212,7 +198,7 @@ impl ProxyBear {
                 }
             }
         }
-        self.refresh_stats(cx);
+        cx.notify();
     }
 
     fn open_settings(&mut self, cx: &mut gpui::Context<Self>) {
@@ -227,7 +213,6 @@ impl ProxyBear {
             self.settings_window = None;
         }
         self.refresh_stats(cx);
-        self.log_tail.refresh();
         let app = cx.entity();
         // Defer construction so input initialization can read the app entity.
         cx.defer(move |cx| {
@@ -263,6 +248,9 @@ impl ProxyBear {
                     Ok(handle) => {
                         this.settings_window = Some(handle);
                         this.refresh_stats(cx);
+                        if this.active_tab == SettingsTab::Logs {
+                            this.log_tail.refresh();
+                        }
                         cx.activate(true);
                     }
                     Err(error) => this
@@ -279,16 +267,38 @@ impl ProxyBear {
     fn refresh_stats(&mut self, cx: &mut gpui::Context<Self>) {
         let stats = self.stats.snapshot();
         let running = self.proxy.is_running();
-        self.stats_text = presentation::settings_status(&stats);
         self.update_icon_for(&stats, running);
-
-        let config = self.config_snapshot();
+        let config = self.config.lock().unwrap_or_else(|e| e.into_inner());
         self.menu.update_tray(&self.tray, &config, &stats, running);
-        self.sync_stats_timer(cx);
-        cx.notify();
+        drop(config);
+        if stats != self.stats_snapshot {
+            self.stats_snapshot = stats;
+            cx.notify();
+        }
+        self.sync_refresh_tasks(cx);
     }
 
-    fn sync_stats_timer(&mut self, cx: &mut gpui::Context<Self>) {
+    fn sync_refresh_tasks(&mut self, cx: &mut gpui::Context<Self>) {
+        if self.settings_window.is_none() || self.active_tab != SettingsTab::Logs {
+            self.log_task = None;
+        } else if self.log_task.is_none() {
+            let mut logs = logging::subscribe();
+            self.log_task = Some(cx.spawn(async move |this, cx| {
+                while logs.changed().await.is_ok() {
+                    cx.background_executor().timer(Duration::from_secs(1)).await;
+                    logs.borrow_and_update();
+                    if this
+                        .update(cx, |this, cx| {
+                            this.log_tail.refresh();
+                            cx.notify();
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            }));
+        }
         if !self.proxy.is_running() || (self.settings_window.is_none() && !self.menu_open) {
             self.stats_task = None;
         } else if self.stats_task.is_none() {
@@ -347,26 +357,20 @@ impl ProxyBear {
     }
 
     fn save_settings(&self) -> Result<()> {
-        let mut config = self.config_snapshot();
+        let mut config = self.config().clone();
         self.form.apply_to_config(&mut config)?;
         self.save_config_state(config)
     }
 
     fn save_config_state(&self, config: AppConfig) -> Result<()> {
         save_config(&self.paths, &config).context("failed to save config")?;
-        *self
-            .config
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = config;
+        *self.config() = config;
         self.stats.clear_error();
         Ok(())
     }
 
-    fn config_snapshot(&self) -> AppConfig {
-        self.config
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
+    fn config(&self) -> MutexGuard<'_, AppConfig> {
+        self.config.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     fn choose_key(&mut self) {

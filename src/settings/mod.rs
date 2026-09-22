@@ -4,7 +4,7 @@ mod view;
 
 use std::net::SocketAddr;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 
 use crate::config::{AppConfig, AuthMethod, LogLevel};
 
@@ -78,39 +78,22 @@ impl SettingsForm {
     }
 
     pub fn save_error(&self) -> Option<String> {
-        self.validate_save().err().map(|error| error.to_string())
+        self.parse_port()
+            .and_then(|_| self.parse_local_addr())
+            .err()
+            .map(|error| error.to_string())
     }
 
-    pub fn start_error(&self) -> Option<String> {
-        self.validate_start().err().map(|error| error.to_string())
-    }
-
-    pub fn can_save(&self) -> bool {
-        self.validate_save().is_ok()
-    }
-
-    pub fn can_start(&self) -> bool {
-        self.validate_start().is_ok()
-    }
-
-    fn validate_save(&self) -> Result<()> {
-        self.parse_port()?;
-        self.parse_local_addr()?;
-        Ok(())
-    }
-
-    fn validate_start(&self) -> Result<()> {
-        self.validate_save()?;
+    pub fn connection_error(&self) -> Option<&'static str> {
         if self.server.trim().is_empty() {
-            bail!("server is empty");
+            Some("Enter the SSH server hostname.")
+        } else if self.username.trim().is_empty() {
+            Some("Enter your SSH username.")
+        } else if self.auth_method == AuthMethod::Key && self.key_path.trim().is_empty() {
+            Some("Choose an SSH private key file.")
+        } else {
+            None
         }
-        if self.username.trim().is_empty() {
-            bail!("username is empty");
-        }
-        if self.auth_method == AuthMethod::Key && self.key_path.trim().is_empty() {
-            bail!("key path is empty");
-        }
-        Ok(())
     }
 
     fn parse_port(&self) -> Result<u16> {

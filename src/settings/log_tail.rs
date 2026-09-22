@@ -5,13 +5,15 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use gpui::SharedString;
+
 const MAX_LOG_LINES: usize = 400;
 
 pub struct LogTail {
     path: PathBuf,
     path_label: String,
     offset: u64,
-    lines: VecDeque<String>,
+    lines: VecDeque<SharedString>,
     status: String,
     error: Option<String>,
 }
@@ -89,7 +91,7 @@ impl LogTail {
         self.error.as_deref()
     }
 
-    pub fn lines(&self) -> &VecDeque<String> {
+    pub fn lines(&self) -> &VecDeque<SharedString> {
         &self.lines
     }
 
@@ -124,6 +126,6 @@ impl LogTail {
         while self.lines.len() >= MAX_LOG_LINES {
             self.lines.pop_front();
         }
-        self.lines.push_back(line.to_string());
+        self.lines.push_back(line.to_owned().into());
     }
 }

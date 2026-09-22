@@ -14,8 +14,10 @@ impl SettingsView {
         let form = &app.form;
         let is_key = form.auth_method == AuthMethod::Key;
         let running = app.proxy.is_running();
-        let validation = form.save_error().or_else(|| form.start_error());
-        let error = app.stats.snapshot().last_error;
+        let save_error = form.save_error();
+        let can_save = save_error.is_none();
+        let validation = save_error.or_else(|| form.connection_error().map(str::to_owned));
+        let can_start = validation.is_none();
         let auth = v_flex()
             .gap_3()
             .child(
@@ -27,14 +29,12 @@ impl SettingsView {
                         "Private key",
                         SettingsField::AuthMethod(AuthMethod::Key),
                         is_key,
-                        cx,
                     ))
                     .child(self.choice_button(
                         "auth-password",
                         "Password",
                         SettingsField::AuthMethod(AuthMethod::Password),
                         !is_key,
-                        cx,
                     )),
             )
             .when(is_key, |auth| {
@@ -94,7 +94,7 @@ impl SettingsView {
                     .child(
                         panel(
                             "Local SOCKS5 proxy",
-                            "Use this address in your browser or other apps.",
+                            "No local authentication. Use a loopback address for local access only.",
                             cx,
                         )
                         .child(field("Bind address", &self.local_addr)),
@@ -102,18 +102,16 @@ impl SettingsView {
             )
             .child(
                 v_flex()
+                    .flex_shrink_0()
                     .gap_2()
-                    .p_4()
+                    .p_5()
                     .border_t_1()
                     .border_color(cx.theme().border)
-                    .when_some(error, |footer, error| {
-                        footer.child(div().text_sm().text_color(cx.theme().danger).child(error))
-                    })
                     .when_some(validation, |footer, error| {
                         footer.child(
                             div()
                                 .text_xs()
-                                .text_color(cx.theme().muted_foreground)
+                                .text_color(cx.theme().warning)
                                 .child(error),
                         )
                     })
@@ -131,15 +129,16 @@ impl SettingsView {
                     .child(
                         div()
                             .flex()
+                            .flex_wrap()
                             .gap_2()
                             .child(
                                 self.button("save", "Save", SettingsField::Save)
-                                    .disabled(!form.can_save()),
+                                    .disabled(!can_save),
                             )
                             .child(
                                 self.button("start", "Save and Start", SettingsField::SaveAndStart)
                                     .primary()
-                                    .disabled(!form.can_start() || running),
+                                    .disabled(!can_start || running),
                             )
                             .child(
                                 self.button("stop", "Stop", SettingsField::Stop)
@@ -150,7 +149,7 @@ impl SettingsView {
                         div()
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
-                            .overflow_hidden()
+                            .truncate()
                             .child(app.config_path.clone()),
                     ),
             )
