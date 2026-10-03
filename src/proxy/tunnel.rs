@@ -1,4 +1,4 @@
-use std::{error::Error, fmt, io, sync::Arc};
+use std::{error::Error, fmt, io};
 
 use russh::{ChannelMsg, client};
 use tokio::{
@@ -40,45 +40,60 @@ impl Error for TunnelError {
     }
 }
 
+/// Copy data both ways until the remote side finishes.
+///
+/// The two directions run concurrently so a full SSH window in one direction
+/// cannot stall the other.
 pub async fn pump(
     mut stream: TcpStream,
-    channel: &mut russh::Channel<client::Msg>,
-    stats: Arc<ProxyStats>,
+    channel: russh::Channel<client::Msg>,
+    stats: &ProxyStats,
 ) -> Result<(), TunnelError> {
-    let mut stream_closed = false;
-    let mut buf = [0; TUNNEL_BUFFER_SIZE];
+    let (mut from_remote, to_remote) = channel.split();
+    let (mut local_read, mut local_write) = stream.split();
 
-    loop {
-        tokio::select! {
-            read = stream.read(&mut buf), if !stream_closed => {
-                match read.map_err(TunnelError::LocalIo)? {
-                    0 => {
-                        stream_closed = true;
-                        channel.eof().await.map_err(TunnelError::Ssh)?;
-                    }
-                    n => {
-                        stats.add_up(n);
-                        channel.data(&buf[..n]).await.map_err(TunnelError::Ssh)?;
-                    }
-                }
-            }
-            msg = channel.wait() => {
-                match msg {
-                    Some(ChannelMsg::Data { data }) => {
-                        stats.add_down(data.len());
-                        stream.write_all(&data).await.map_err(TunnelError::LocalIo)?;
-                    }
-                    Some(ChannelMsg::Eof) | None => {
-                        if !stream_closed {
-                            channel.eof().await.ok();
-                        }
-                        break;
-                    }
-                    Some(_) => {}
+    let upload = async {
+        let mut buf = vec![0; TUNNEL_BUFFER_SIZE];
+        loop {
+            match local_read
+                .read(&mut buf)
+                .await
+                .map_err(TunnelError::LocalIo)?
+            {
+                0 => return to_remote.eof().await.map_err(TunnelError::Ssh),
+                n => {
+                    stats.add_up(n);
+                    to_remote.data(&buf[..n]).await.map_err(TunnelError::Ssh)?;
                 }
             }
         }
-    }
+    };
+    let download = async {
+        while let Some(msg) = from_remote.wait().await {
+            match msg {
+                ChannelMsg::Data { data } => {
+                    stats.add_down(data.len());
+                    local_write
+                        .write_all(&data)
+                        .await
+                        .map_err(TunnelError::LocalIo)?;
+                }
+                ChannelMsg::Eof => break,
+                _ => {}
+            }
+        }
+        Ok(())
+    };
+    tokio::pin!(upload, download);
 
-    Ok(())
+    let result = tokio::select! {
+        result = &mut download => result,
+        result = &mut upload => match result {
+            Ok(()) => download.await,
+            Err(error) => Err(error),
+        },
+    };
+    // russh does not close channels on drop; release it on the server too.
+    let _ = to_remote.close().await;
+    result
 }

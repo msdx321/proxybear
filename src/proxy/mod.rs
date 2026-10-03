@@ -168,8 +168,7 @@ async fn handle_client(
     };
 
     socks::write_reply(&mut stream, socks::REPLY_SUCCEEDED).await?;
-    let mut channel = opened.channel;
-    if let Err(error) = tunnel::pump(stream, &mut channel, Arc::clone(&stats)).await {
+    if let Err(error) = tunnel::pump(stream, opened.channel, &stats).await {
         if error.ssh_session_failed() {
             tracing::warn!(
                 event = "ssh_tunnel_failed",
