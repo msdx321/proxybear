@@ -100,13 +100,9 @@ pub async fn run_proxy(
             }
             accepted = listener.accept() => {
                 let (stream, peer_addr) = accepted.context("failed to accept local connection")?;
-                let session = Arc::clone(&session);
-                let stats = Arc::clone(&stats);
-                clients.spawn(async move {
-                    if let Err(error) = handle_client(stream, peer_addr, session, Arc::clone(&stats)).await {
-                        stats.set_error(error.to_string());
-                    }
-                });
+                // Per-connection failures are logged where they happen; they
+                // must not mark the whole proxy unhealthy.
+                clients.spawn(handle_client(stream, peer_addr, Arc::clone(&session), Arc::clone(&stats)));
             }
             _ = clients.join_next(), if !clients.is_empty() => {}
         }
