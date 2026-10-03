@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use futures::channel::mpsc;
 use tray_icon::{
     TrayIcon, TrayIconBuilder,
-    menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem},
+    menu::{CheckMenuItem, ContextMenu, Menu, MenuEvent, MenuItem, PredefinedMenuItem},
 };
 
 use crate::config::{AppPaths, is_autostart_enabled};
@@ -110,6 +110,11 @@ impl TrayMenu {
             &quit,
         ])?;
 
+        // tray-icon only attaches the menu to the status item during a click,
+        // so take the NSMenu from the menu itself before it moves into the tray.
+        #[cfg(target_os = "macos")]
+        let ns_menu = menu.ns_menu().cast::<AnyObject>();
+
         let icon_state = TrayIconState::Unhappy;
         let tray = TrayIconBuilder::new()
             .with_icon(icons::tray_icon(icon_state)?)
@@ -121,12 +126,10 @@ impl TrayMenu {
 
         #[cfg(target_os = "macos")]
         let delegate: Retained<MenuDelegate> = unsafe { msg_send![MenuDelegate::class(), new] };
+        // SAFETY: `ns_menu` is owned by the muda `Menu`, which the tray keeps alive.
         #[cfg(target_os = "macos")]
-        if let Some(si) = tray.ns_status_item() {
-            unsafe {
-                let m: Retained<AnyObject> = msg_send![&si, menu];
-                let _: () = msg_send![&m, setDelegate: &*delegate];
-            }
+        unsafe {
+            let _: () = msg_send![ns_menu, setDelegate: &*delegate];
         }
 
         MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
