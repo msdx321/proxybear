@@ -18,6 +18,7 @@ impl SettingsView {
         let can_save = save_error.is_none();
         let validation = save_error.or_else(|| form.connection_error().map(str::to_owned));
         let can_start = validation.is_none();
+        let host_key = app.config().host_fingerprint.clone();
         let auth = v_flex()
             .gap_3()
             .child(
@@ -80,6 +81,39 @@ impl SettingsView {
                                         .w(px(96.))
                                         .flex_shrink_0()
                                         .child(field("Port", &self.port)),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_3()
+                                .child(
+                                    v_flex()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .gap_1()
+                                        .child(div().text_sm().child("Host key"))
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(cx.theme().muted_foreground)
+                                                .truncate()
+                                                .child(host_key.clone().unwrap_or_else(|| {
+                                                    "Not saved yet. Trusted on the next connection."
+                                                        .into()
+                                                })),
+                                        ),
+                                )
+                                .child(
+                                    self.button(
+                                        "forget-host-key",
+                                        "Forget",
+                                        SettingsField::ForgetHostKey,
+                                    )
+                                    .danger()
+                                    .outline()
+                                    .disabled(host_key.is_none()),
                                 ),
                         ),
                     )

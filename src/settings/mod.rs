@@ -33,6 +33,7 @@ pub enum SettingsField {
     Save,
     SaveAndStart,
     Stop,
+    ForgetHostKey,
     ChooseKey,
     OpenLog,
     RevealLog,

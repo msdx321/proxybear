@@ -188,6 +188,7 @@ impl ProxyBear {
                 self.refresh_stats(cx);
             }
             SettingsField::Stop => self.stop_proxy(cx),
+            SettingsField::ForgetHostKey => self.forget_host_key(),
             SettingsField::ChooseKey => self.choose_key(),
             SettingsField::OpenLog => self.open_log(),
             SettingsField::RevealLog => self.reveal_log(),
@@ -370,6 +371,20 @@ impl ProxyBear {
         *self.config() = config;
         self.stats.clear_error();
         Ok(())
+    }
+
+    fn forget_host_key(&mut self) {
+        let mut config = self.config().clone();
+        config.host_fingerprint = None;
+        self.feedback = Some(match self.save_config_state(config) {
+            Ok(()) if self.proxy.is_running() => {
+                "Host key forgotten. Restart the proxy to trust the server's current key.".into()
+            }
+            Ok(()) => {
+                "Host key forgotten. The server's key is saved on the next connection.".into()
+            }
+            Err(error) => format!("Could not forget host key: {error}"),
+        });
     }
 
     fn config(&self) -> MutexGuard<'_, AppConfig> {
