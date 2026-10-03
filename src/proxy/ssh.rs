@@ -33,7 +33,8 @@ pub struct Connector {
     host_fingerprint: Arc<Mutex<Option<String>>>,
 }
 
-/// A connect failure that retrying with the same settings cannot fix.
+/// A connect failure that retrying with the same settings is unlikely to fix,
+/// such as rejected credentials or a changed host key.
 #[derive(Debug)]
 pub struct FatalError(String);
 

@@ -69,8 +69,8 @@ pub async fn run_proxy(
         tokio::select! {
             _ = &mut shutdown => break Ok(()),
             Some(result) = supervisors.join_next() => {
-                // Supervisors only return on errors that retrying cannot fix.
-                break result.context("SSH session supervisor failed").and_then(|result| result);
+                // Supervisors run until aborted, so this only catches a panic.
+                break result.context("SSH session supervisor failed");
             }
             accepted = listener.accept() => match accepted {
                 // Per-connection failures are logged where they happen; they
