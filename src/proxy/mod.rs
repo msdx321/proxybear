@@ -1,4 +1,4 @@
-mod session;
+mod pool;
 mod socks;
 mod ssh;
 mod tunnel;
@@ -6,13 +6,15 @@ mod tunnel;
 use std::{
     net::SocketAddr,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use anyhow::{Context, Result};
 use tokio::{
     net::{TcpListener, TcpStream},
-    sync::{RwLock as TokioRwLock, oneshot},
+    sync::oneshot,
     task::JoinSet,
+    time::sleep,
 };
 
 use crate::{
@@ -20,7 +22,9 @@ use crate::{
     config::{AppConfig, AppPaths},
 };
 
-use session::{SessionState, SharedSession};
+use pool::{POOL_SIZE, Pool};
+
+const ACCEPT_RETRY_DELAY: Duration = Duration::from_millis(100);
 
 pub async fn run_proxy(
     config: Arc<Mutex<AppConfig>>,
@@ -28,12 +32,12 @@ pub async fn run_proxy(
     stats: Arc<ProxyStats>,
     mut shutdown: oneshot::Receiver<()>,
 ) -> Result<()> {
-    let local_addr = {
-        let config = config
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        config.runtime_config()?.listen.local_addr
-    };
+    // Snapshot settings once so every session in the pool uses the same ones.
+    let runtime = config
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .runtime_config()?;
+    let local_addr = runtime.listen.local_addr;
 
     let listener = TcpListener::bind(local_addr)
         .await
@@ -50,69 +54,73 @@ pub async fn run_proxy(
 
     tracing::info!(event = "proxy_starting", local_addr = %local_addr, "Proxy starting");
     stats.set_status("Connecting to SSH server...");
-    let handle = tokio::select! {
-        result = ssh::connect(Arc::clone(&config), paths.clone()) => result.map_err(|error| {
-            tracing::error!(
-                event = "ssh_connect_failed",
-                error = %error,
-                "Failed to connect SSH session"
-            );
-            error
-        })?,
-        _ = &mut shutdown => {
-            stats.set_status("Stopped");
-            tracing::info!(event = "proxy_stopped", reason = "shutdown", "Proxy stopped");
-            return Ok(());
-        }
-    };
-    let listening_status = format!("Listening on {local_addr}");
-    let session = Arc::new(TokioRwLock::new(SessionState::new(
-        handle,
-        Arc::clone(&config),
-        paths,
-        listening_status.clone(),
-    )));
-    stats.clear_error();
-    stats.set_status(listening_status);
-    stats.ssh_connected();
-    tracing::info!(event = "proxy_started", local_addr = %local_addr, "Proxy started");
+    let pool = Arc::new(Pool::new(
+        Arc::clone(&stats),
+        format!("Listening on {local_addr}"),
+    ));
+    let mut supervisors = JoinSet::new();
+    for index in 0..POOL_SIZE {
+        supervisors.spawn(Arc::clone(&pool).supervise(
+            index,
+            runtime.ssh.clone(),
+            Arc::clone(&config),
+            paths.clone(),
+        ));
+    }
 
     let mut clients = JoinSet::new();
-    loop {
+    let result = loop {
         tokio::select! {
-            _ = &mut shutdown => {
-                clients.abort_all();
-                while clients.join_next().await.is_some() {}
-                let state = session.read().await;
-                if !state.is_dead() {
-                    stats.ssh_disconnected();
-                }
-                if let Err(error) = state.disconnect().await {
-                    tracing::warn!(
-                        event = "ssh_disconnect_failed",
-                        error = %error,
-                        "Failed to close SSH session during shutdown"
-                    );
-                }
-                stats.set_status("Stopped");
-                tracing::info!(event = "proxy_stopped", reason = "shutdown", "Proxy stopped");
-                return Ok(());
+            _ = &mut shutdown => break Ok(()),
+            Some(result) = supervisors.join_next() => {
+                // Supervisors only return on errors that retrying cannot fix.
+                break result.context("SSH session supervisor failed").and_then(|result| result);
             }
-            accepted = listener.accept() => {
-                let (stream, peer_addr) = accepted.context("failed to accept local connection")?;
+            accepted = listener.accept() => match accepted {
                 // Per-connection failures are logged where they happen; they
                 // must not mark the whole proxy unhealthy.
-                clients.spawn(handle_client(stream, peer_addr, Arc::clone(&session), Arc::clone(&stats)));
-            }
+                Ok((stream, peer_addr)) => {
+                    clients.spawn(handle_client(stream, peer_addr, Arc::clone(&pool), Arc::clone(&stats)));
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        event = "proxy_accept_failed",
+                        error = %error,
+                        "Failed to accept local connection"
+                    );
+                    sleep(ACCEPT_RETRY_DELAY).await;
+                }
+            },
             _ = clients.join_next(), if !clients.is_empty() => {}
         }
+    };
+
+    clients.abort_all();
+    supervisors.abort_all();
+    while clients.join_next().await.is_some() {}
+    while supervisors.join_next().await.is_some() {}
+    pool.close().await;
+    stats.set_status("Stopped");
+    match &result {
+        Ok(()) => tracing::info!(
+            event = "proxy_stopped",
+            reason = "shutdown",
+            "Proxy stopped"
+        ),
+        Err(error) => tracing::error!(
+            event = "proxy_stopped",
+            reason = "error",
+            error = %error,
+            "Proxy stopped"
+        ),
     }
+    result
 }
 
 async fn handle_client(
     mut stream: TcpStream,
     peer_addr: SocketAddr,
-    session: SharedSession,
+    pool: Arc<Pool>,
     stats: Arc<ProxyStats>,
 ) -> Result<()> {
     stream
@@ -151,14 +159,13 @@ async fn handle_client(
         error
     })?;
 
-    let opened =
-        match session::open_channel_with_retry(&session, &request, &peer_addr, &stats).await {
-            Ok(opened) => opened,
-            Err(error) => {
-                let _ = socks::write_reply(&mut stream, socks::REPLY_GENERAL_FAILURE).await;
-                return Err(error);
-            }
-        };
+    let opened = match pool.open_channel(&request, &peer_addr).await {
+        Ok(opened) => opened,
+        Err(error) => {
+            let _ = socks::write_reply(&mut stream, socks::REPLY_GENERAL_FAILURE).await;
+            return Err(error);
+        }
+    };
 
     socks::write_reply(&mut stream, socks::REPLY_SUCCEEDED).await?;
     let mut channel = opened.channel;
@@ -172,7 +179,7 @@ async fn handle_client(
                 error = %error,
                 "SSH tunnel failed"
             );
-            session::mark_dead_if_generation(&session, &stats, opened.generation).await;
+            opened.lease.kill_session();
             return Ok(());
         } else {
             tracing::debug!(
