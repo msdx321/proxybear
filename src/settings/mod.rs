@@ -66,9 +66,15 @@ impl SettingsForm {
     }
 
     pub fn apply_to_config(&self, config: &mut AppConfig) -> Result<()> {
-        config.server = self.server.trim().to_string();
+        let server = self.server.trim();
+        let port = self.parse_port()?;
+        if server != config.server || port != config.port {
+            // The saved host key belongs to the previous server.
+            config.host_fingerprint = None;
+        }
+        config.server = server.to_string();
         config.username = self.username.trim().to_string();
-        config.port = self.parse_port()?;
+        config.port = port;
         config.set_auth_method(self.auth_method);
         config.key_path = self.key_path.trim().to_string();
         config.key_password.clone_from(&self.key_password);

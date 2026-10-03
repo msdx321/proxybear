@@ -1,7 +1,7 @@
 use std::{
     net::SocketAddr,
     sync::{
-        Arc, Mutex,
+        Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
@@ -15,10 +15,7 @@ use tokio::{
     time::{sleep, timeout},
 };
 
-use crate::{
-    app::stats::ProxyStats,
-    config::{AppConfig, AppPaths, SshConnectConfig},
-};
+use crate::app::stats::ProxyStats;
 
 use super::{socks::Request, ssh};
 
@@ -118,16 +115,10 @@ impl Pool {
     }
 
     /// Keep slot `index` connected. Returns only on a fatal connect error.
-    pub async fn supervise(
-        self: Arc<Self>,
-        index: usize,
-        ssh: SshConnectConfig,
-        config: Arc<Mutex<AppConfig>>,
-        paths: AppPaths,
-    ) -> Result<()> {
+    pub async fn supervise(self: Arc<Self>, index: usize, connector: ssh::Connector) -> Result<()> {
         let mut backoff = RECONNECT_BACKOFF_MIN;
         loop {
-            match ssh::connect(&ssh, Arc::clone(&config), paths.clone()).await {
+            match connector.connect().await {
                 Ok((handle, closed)) => {
                     backoff = RECONNECT_BACKOFF_MIN;
                     let started = Instant::now();

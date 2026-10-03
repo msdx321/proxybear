@@ -58,14 +58,10 @@ pub async fn run_proxy(
         Arc::clone(&stats),
         format!("Listening on {local_addr}"),
     ));
+    let connector = ssh::Connector::new(runtime.ssh, Arc::clone(&config), paths);
     let mut supervisors = JoinSet::new();
     for index in 0..POOL_SIZE {
-        supervisors.spawn(Arc::clone(&pool).supervise(
-            index,
-            runtime.ssh.clone(),
-            Arc::clone(&config),
-            paths.clone(),
-        ));
+        supervisors.spawn(Arc::clone(&pool).supervise(index, connector.clone()));
     }
 
     let mut clients = JoinSet::new();
