@@ -15,11 +15,12 @@ use super::stats::ProxyStats;
 
 pub struct ProxyController {
     runtime: Runtime,
-    handle: Option<ProxyHandle>,
-}
-
-struct ProxyHandle {
+    /// Present while the proxy runs and has not been asked to stop.
     shutdown: Option<oneshot::Sender<()>>,
+    /// The proxy task has not finished yet; it may still be stopping.
+    task_alive: bool,
+    /// Start again once the stopping task finishes.
+    start_pending: bool,
 }
 
 impl ProxyController {
@@ -33,25 +34,34 @@ impl ProxyController {
 
         Ok(Self {
             runtime,
-            handle: None,
+            shutdown: None,
+            task_alive: false,
+            start_pending: false,
         })
     }
 
+    /// Whether the proxy runs and has not been asked to stop.
     pub fn is_running(&self) -> bool {
-        self.handle.is_some()
+        self.shutdown.is_some()
     }
 
-    pub fn finish(&mut self) {
-        self.handle = None;
+    /// Record that the proxy task ended. Returns whether a start was
+    /// requested while it was stopping.
+    pub fn finish(&mut self) -> bool {
+        self.shutdown = None;
+        self.task_alive = false;
+        std::mem::take(&mut self.start_pending)
     }
 
+    /// Start the proxy. Returns the task to watch, or `None` when it is
+    /// already running or the start waits for the previous run to stop.
     pub fn start(
         &mut self,
         config: Arc<Mutex<AppConfig>>,
         paths: AppPaths,
         stats: Arc<ProxyStats>,
     ) -> Result<Option<tokio::task::JoinHandle<Result<()>>>> {
-        if self.handle.is_some() {
+        if self.is_running() {
             return Ok(None);
         }
 
@@ -59,27 +69,29 @@ impl ProxyController {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .validate_ready()?;
+        if self.task_alive {
+            self.start_pending = true;
+            return Ok(None);
+        }
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         stats.set_status("Starting");
         stats.clear_error();
         let task = self
             .runtime
             .spawn(proxy::run_proxy(config, paths, stats, shutdown_rx));
-        self.handle = Some(ProxyHandle {
-            shutdown: Some(shutdown_tx),
-        });
+        self.shutdown = Some(shutdown_tx);
+        self.task_alive = true;
         Ok(Some(task))
     }
 
     pub fn stop(&mut self, stats: &ProxyStats) {
-        if let Some(handle) = self.handle.as_mut() {
-            if let Some(shutdown) = handle.shutdown.take() {
-                stats.set_status("Stopping...");
-                if shutdown.send(()).is_err() {
-                    stats.set_status("Stopped");
-                }
+        self.start_pending = false;
+        if let Some(shutdown) = self.shutdown.take() {
+            stats.set_status("Stopping...");
+            if shutdown.send(()).is_err() {
+                stats.set_status("Stopped");
             }
-        } else {
+        } else if !self.task_alive {
             stats.set_status("Stopped");
         }
     }

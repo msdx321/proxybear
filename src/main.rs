@@ -335,10 +335,13 @@ impl ProxyBear {
                         .context("proxy task failed")
                         .and_then(|result| result);
                     let _ = this.update(cx, |this, cx| {
-                        this.proxy.finish();
+                        let start_pending = this.proxy.finish();
                         this.stats.set_status("Stopped");
                         if let Err(error) = result {
                             this.stats.set_error(error.to_string());
+                        }
+                        if start_pending {
+                            this.start_proxy(cx);
                         }
                         this.refresh_stats(cx);
                     });
