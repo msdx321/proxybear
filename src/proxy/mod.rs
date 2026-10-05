@@ -22,7 +22,7 @@ use crate::{
     config::{AppConfig, AppPaths},
 };
 
-use pool::{POOL_SIZE, Pool};
+use pool::Pool;
 
 const ACCEPT_RETRY_DELAY: Duration = Duration::from_millis(100);
 
@@ -55,12 +55,13 @@ pub async fn run_proxy(
     tracing::info!(event = "proxy_starting", local_addr = %local_addr, "Proxy starting");
     stats.set_status("Connecting to SSH server...");
     let pool = Arc::new(Pool::new(
+        runtime.pool_size,
         Arc::clone(&stats),
         format!("Listening on {local_addr}"),
     ));
     let connector = ssh::Connector::new(runtime.ssh, Arc::clone(&config), paths);
     let mut supervisors = JoinSet::new();
-    for index in 0..POOL_SIZE {
+    for index in 0..runtime.pool_size {
         supervisors.spawn(Arc::clone(&pool).supervise(index, connector.clone()));
     }
 

@@ -19,9 +19,6 @@ use crate::app::stats::ProxyStats;
 
 use super::{socks::Request, ssh};
 
-/// Number of SSH sessions kept open. New channels go to the least-loaded one.
-pub const POOL_SIZE: usize = 3;
-
 const SESSION_WAIT_TIMEOUT: Duration = Duration::from_secs(10);
 const CHANNEL_OPEN_RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
 const CHANNEL_OPEN_ATTEMPTS: usize = 2;
@@ -95,7 +92,8 @@ pub struct OpenedChannel {
     pub lease: Lease,
 }
 
-/// SSH sessions shared by all SOCKS connections.
+/// SSH sessions shared by all SOCKS connections. New channels go to the
+/// least-loaded one.
 pub struct Pool {
     slots: watch::Sender<Vec<Option<Arc<Session>>>>,
     stats: Arc<ProxyStats>,
@@ -105,9 +103,9 @@ pub struct Pool {
 }
 
 impl Pool {
-    pub fn new(stats: Arc<ProxyStats>, listening_status: String) -> Self {
+    pub fn new(size: usize, stats: Arc<ProxyStats>, listening_status: String) -> Self {
         Self {
-            slots: watch::Sender::new(vec![None; POOL_SIZE]),
+            slots: watch::Sender::new(vec![None; size]),
             stats,
             listening_status,
             wake: Notify::new(),
@@ -232,7 +230,8 @@ impl Pool {
 
     /// Disconnect every live session.
     pub async fn close(&self) {
-        let sessions: Vec<_> = self.slots.send_replace(vec![None; POOL_SIZE]);
+        let size = self.slots.borrow().len();
+        let sessions: Vec<_> = self.slots.send_replace(vec![None; size]);
         join_all(
             sessions
                 .iter()
@@ -371,8 +370,9 @@ impl Pool {
                 self.stats.ssh_connected();
                 self.stats.clear_error();
                 self.stats.set_status(format!(
-                    "{} · {live}/{POOL_SIZE} SSH sessions",
-                    self.listening_status
+                    "{} · {live}/{} SSH sessions",
+                    self.listening_status,
+                    slots.len()
                 ));
             } else {
                 self.stats.ssh_disconnected();

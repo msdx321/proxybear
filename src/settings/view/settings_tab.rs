@@ -131,7 +131,18 @@ impl SettingsView {
                             "No local authentication. Use a loopback address for local access only.",
                             cx,
                         )
-                        .child(field("Bind address", &self.local_addr)),
+                        .child(
+                            div()
+                                .flex()
+                                .gap_3()
+                                .child(field("Bind address", &self.local_addr))
+                                .child(
+                                    div()
+                                        .w(px(120.))
+                                        .flex_shrink_0()
+                                        .child(field("SSH sessions", &self.pool_size)),
+                                ),
+                        ),
                     ),
             )
             .child(

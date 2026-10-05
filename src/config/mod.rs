@@ -6,6 +6,9 @@ use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
 const APP_ID: &str = "com.msdx321.proxybear";
+/// Number of SSH sessions kept open when the config does not set one.
+pub const DEFAULT_POOL_SIZE: usize = 3;
+pub const MAX_POOL_SIZE: usize = 16;
 
 #[derive(Clone, Debug)]
 pub struct AppPaths {
@@ -65,6 +68,7 @@ pub struct SshConnectConfig {
 pub struct RuntimeConfig {
     pub listen: ListenConfig,
     pub ssh: SshConnectConfig,
+    pub pool_size: usize,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -97,6 +101,8 @@ pub struct AppConfig {
     pub server: String,
     pub username: String,
     pub port: u16,
+    #[serde(default = "default_pool_size")]
+    pub pool_size: usize,
     #[serde(default)]
     pub auth_method: String,
     pub key_path: String,
@@ -120,6 +126,7 @@ impl Default for AppConfig {
             server: String::new(),
             username: env::var("USER").unwrap_or_default(),
             port: 22,
+            pool_size: DEFAULT_POOL_SIZE,
             auth_method: AuthMethod::Key.as_str().into(),
             key_path: String::new(),
             key_password: String::new(),
@@ -161,6 +168,10 @@ impl AppConfig {
             bail!("key path is empty");
         }
 
+        if !(1..=MAX_POOL_SIZE).contains(&self.pool_size) {
+            bail!("SSH session count must be between 1 and {MAX_POOL_SIZE}");
+        }
+
         let local_addr = self
             .local_addr
             .trim()
@@ -177,8 +188,13 @@ impl AppConfig {
                 key_password: self.key_password.clone(),
                 ssh_password: self.ssh_password.clone(),
             },
+            pool_size: self.pool_size,
         })
     }
+}
+
+fn default_pool_size() -> usize {
+    DEFAULT_POOL_SIZE
 }
 
 pub fn app_paths() -> Result<AppPaths> {

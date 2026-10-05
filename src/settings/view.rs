@@ -17,6 +17,7 @@ pub struct SettingsView {
     server: Entity<InputState>,
     username: Entity<InputState>,
     port: Entity<InputState>,
+    pool_size: Entity<InputState>,
     key_path: Entity<InputState>,
     key_password: Entity<InputState>,
     ssh_password: Entity<InputState>,
@@ -62,6 +63,7 @@ impl SettingsView {
                 SettingsField::Username,
             ),
             port: input(form.port, "22", false, SettingsField::Port),
+            pool_size: input(form.pool_size, "3", false, SettingsField::PoolSize),
             key_path: input(
                 form.key_path,
                 "/Users/me/.ssh/id_ed25519",

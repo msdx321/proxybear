@@ -6,7 +6,7 @@ use std::net::SocketAddr;
 
 use anyhow::{Context, Result};
 
-use crate::config::{AppConfig, AuthMethod, LogLevel};
+use crate::config::{AppConfig, AuthMethod, LogLevel, MAX_POOL_SIZE};
 
 pub use log_tail::LogTail;
 pub use theme::init as init_theme;
@@ -25,6 +25,7 @@ pub enum SettingsField {
     Server(String),
     Username(String),
     Port(String),
+    PoolSize(String),
     AuthMethod(AuthMethod),
     KeyPath(String),
     KeyPassword(String),
@@ -45,6 +46,7 @@ pub struct SettingsForm {
     pub server: String,
     pub username: String,
     pub port: String,
+    pub pool_size: String,
     pub auth_method: AuthMethod,
     pub key_path: String,
     pub key_password: String,
@@ -58,6 +60,7 @@ impl SettingsForm {
             server: config.server.clone(),
             username: config.username.clone(),
             port: config.port.to_string(),
+            pool_size: config.pool_size.to_string(),
             auth_method: config.auth_method(),
             key_path: config.key_path.clone(),
             key_password: config.key_password.clone(),
@@ -76,6 +79,7 @@ impl SettingsForm {
         config.server = server.to_string();
         config.username = self.username.trim().to_string();
         config.port = port;
+        config.pool_size = self.parse_pool_size()?;
         config.set_auth_method(self.auth_method);
         config.key_path = self.key_path.trim().to_string();
         config.key_password.clone_from(&self.key_password);
@@ -86,6 +90,7 @@ impl SettingsForm {
 
     pub fn save_error(&self) -> Option<String> {
         self.parse_port()
+            .and_then(|_| self.parse_pool_size())
             .and_then(|_| self.parse_local_addr())
             .err()
             .map(|error| error.to_string())
@@ -107,6 +112,17 @@ impl SettingsForm {
         let port = self.port.trim();
         port.parse()
             .with_context(|| format!("invalid SSH port {port}"))
+    }
+
+    fn parse_pool_size(&self) -> Result<usize> {
+        let pool_size = self.pool_size.trim();
+        pool_size
+            .parse()
+            .ok()
+            .filter(|size| (1..=MAX_POOL_SIZE).contains(size))
+            .with_context(|| {
+                format!("SSH session count must be between 1 and {MAX_POOL_SIZE}, got {pool_size}")
+            })
     }
 
     fn parse_local_addr(&self) -> Result<SocketAddr> {

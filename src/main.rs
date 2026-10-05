@@ -169,6 +169,7 @@ impl ProxyBear {
             SettingsField::Server(v) => self.form.server = v,
             SettingsField::Username(v) => self.form.username = v,
             SettingsField::Port(v) => self.form.port = v,
+            SettingsField::PoolSize(v) => self.form.pool_size = v,
             SettingsField::AuthMethod(v) => self.form.auth_method = v,
             SettingsField::KeyPath(v) => self.form.key_path = v,
             SettingsField::KeyPassword(v) => self.form.key_password = v,
