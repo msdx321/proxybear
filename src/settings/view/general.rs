@@ -159,18 +159,42 @@ impl SettingsView {
                     ))
                     .child(group(
                         None,
-                        [row_with(
-                            "Settings file",
-                            div().truncate().child(app.config_path.clone()),
-                            self.button(
-                                "reveal-config",
-                                "Show in Finder",
-                                SettingsField::RevealConfig,
-                            )
-                            .small()
-                            .ghost(),
-                            cx,
-                        )],
+                        [
+                            row_with(
+                                "Version",
+                                if app.updater.is_some() {
+                                    "ProxyBear also checks for updates on its own."
+                                } else {
+                                    "Updates are available in release builds."
+                                },
+                                h_flex()
+                                    .gap_3()
+                                    .child(value(env!("CARGO_PKG_VERSION"), cx))
+                                    .when(app.updater.is_some(), |row| {
+                                        row.child(
+                                            self.button(
+                                                "check-updates",
+                                                "Check for Updates…",
+                                                SettingsField::CheckForUpdates,
+                                            )
+                                            .small(),
+                                        )
+                                    }),
+                                cx,
+                            ),
+                            row_with(
+                                "Settings file",
+                                div().truncate().child(app.config_path.clone()),
+                                self.button(
+                                    "reveal-config",
+                                    "Show in Finder",
+                                    SettingsField::RevealConfig,
+                                )
+                                .small()
+                                .ghost(),
+                                cx,
+                            ),
+                        ],
                         cx,
                     )),
             )

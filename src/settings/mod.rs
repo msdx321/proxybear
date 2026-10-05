@@ -46,6 +46,7 @@ pub enum SettingsField {
     OpenLog,
     RevealLog,
     RevealConfig,
+    CheckForUpdates,
     ClearLog,
 }
 

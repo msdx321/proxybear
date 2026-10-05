@@ -5,3 +5,4 @@ pub mod presentation;
 pub mod proxy_control;
 pub mod stats;
 pub mod tray;
+pub mod updater;

@@ -23,6 +23,7 @@ use app::{
     proxy_control::ProxyController,
     stats::{self, ProxyStats, StatsSnapshot},
     tray::{self, MenuAction, TrayMenu},
+    updater::Updater,
 };
 use config::{AppConfig, AppPaths, app_paths, load_config, save_config};
 use settings::{LogTail, SettingsField, SettingsForm, SettingsTab, SettingsView};
@@ -33,6 +34,8 @@ struct ProxyBear {
     stats: Arc<ProxyStats>,
     proxy: ProxyController,
     tray: TrayMenu,
+    /// Present only in release bundles, which embed Sparkle.
+    updater: Option<Updater>,
     menu: MenuPresenter,
     form: SettingsForm,
     active_tab: SettingsTab,
@@ -68,7 +71,9 @@ impl ProxyBear {
             stats.set_error(format!("{error:#}"));
         }
         let proxy = ProxyController::new().context("create proxy controller")?;
-        let tray = TrayMenu::new(&paths, config.auto_connect).context("tray menu")?;
+        let updater = Updater::start();
+        let tray =
+            TrayMenu::new(&paths, config.auto_connect, updater.is_some()).context("tray menu")?;
         let config_path = paths.config_path.display().to_string();
         let form = SettingsForm::from_config(&config);
         let log_tail = LogTail::new(paths.log_path());
@@ -78,6 +83,7 @@ impl ProxyBear {
             stats,
             proxy,
             tray,
+            updater,
             menu: MenuPresenter::default(),
             form,
             active_tab: SettingsTab::General,
@@ -142,6 +148,7 @@ impl ProxyBear {
                 let enabled = !self.config().auto_connect;
                 self.set_auto_connect(enabled);
             }
+            MenuAction::CheckForUpdates => self.check_for_updates(),
             MenuAction::Quit => {
                 self.stop_proxy(cx);
                 cx.quit();
@@ -213,6 +220,7 @@ impl ProxyBear {
             SettingsField::OpenLog => self.open_log(),
             SettingsField::RevealLog => self.reveal(self.log_tail.path()),
             SettingsField::RevealConfig => self.reveal(&self.paths.config_path),
+            SettingsField::CheckForUpdates => self.check_for_updates(),
             SettingsField::ClearLog => {
                 if let Err(error) = self.log_tail.clear() {
                     self.stats
@@ -462,6 +470,12 @@ impl ProxyBear {
     fn revert_form(&mut self) {
         let form = SettingsForm::from_config(&self.config());
         self.form = form;
+    }
+
+    fn check_for_updates(&self) {
+        if let Some(updater) = &self.updater {
+            updater.check();
+        }
     }
 
     fn has_unsaved_changes(&self) -> bool {

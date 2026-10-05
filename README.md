@@ -8,7 +8,10 @@ A native macOS menu-bar app that runs a local SOCKS5 proxy over SSH.
 - **SOCKS5 over SSH**: tunnels your traffic through an SSH server
 - **No local authentication**: local proxy is unauthenticated, for use by local tools
 - **Launch at login**: optional LaunchAgent for autostart
-- **GPUI settings**: grouped connection settings, masked credentials, validation feedback, and live activity logs
+- **GPUI settings**: grouped connection settings, masked credentials, validation feedback, and searchable activity logs
+- **Keychain secrets**: SSH passwords and key passphrases are stored in the macOS Keychain
+- **Host key verification**: asks you to confirm a server's key on first connect and when it changes
+- **Automatic updates**: checks for new releases with Sparkle
 
 ## Installation
 

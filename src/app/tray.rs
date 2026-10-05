@@ -29,6 +29,7 @@ pub enum MenuAction {
     Settings,
     ToggleAutostart,
     ToggleAutoConnect,
+    CheckForUpdates,
     Quit,
     MenuOpened,
     MenuClosed,
@@ -79,7 +80,7 @@ pub struct TrayMenu {
 }
 
 impl TrayMenu {
-    pub fn new(paths: &AppPaths, auto_connect: bool) -> Result<Self> {
+    pub fn new(paths: &AppPaths, auto_connect: bool, updates: bool) -> Result<Self> {
         let menu = Menu::new();
         let status = MenuItem::with_id("status", "Status: Stopped", false, None);
         let stats = MenuItem::with_id("stats", "up 0 B, down 0 B", false, None);
@@ -107,8 +108,16 @@ impl TrayMenu {
             &autostart,
             &auto_connect,
             &sep,
-            &quit,
         ])?;
+        if updates {
+            menu.append(&MenuItem::with_id(
+                "check_updates",
+                "Check for Updates\u{2026}",
+                true,
+                None,
+            ))?;
+        }
+        menu.append(&quit)?;
 
         // tray-icon only attaches the menu to the status item during a click,
         // so take the NSMenu from the menu itself before it moves into the tray.
@@ -138,6 +147,7 @@ impl TrayMenu {
                 "settings" => Some(MenuAction::Settings),
                 "autostart" => Some(MenuAction::ToggleAutostart),
                 "auto_connect" => Some(MenuAction::ToggleAutoConnect),
+                "check_updates" => Some(MenuAction::CheckForUpdates),
                 "quit" => Some(MenuAction::Quit),
                 _ => None,
             };

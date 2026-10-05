@@ -2,3 +2,7 @@
   <true/>
   <key>NSPrincipalClass</key>
   <string>NSApplication</string>
+  <key>SUFeedURL</key>
+  <string>https://github.com/msdx321/proxybear/releases/latest/download/appcast.xml</string>
+  <key>SUPublicEDKey</key>
+  <string>REPLACE_WITH_SPARKLE_PUBLIC_KEY</string>

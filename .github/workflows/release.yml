@@ -88,6 +88,13 @@ jobs:
           APP="target/release/bundle/osx/ProxyBear.app"
           test -d "$APP"
           plutil -lint "$APP/Contents/Info.plist"
+          if [ "$(plutil -extract SUPublicEDKey raw "$APP/Contents/Info.plist")" = REPLACE_WITH_SPARKLE_PUBLIC_KEY ]; then
+            echo "Set SUPublicEDKey in bundle/macos-info.plist before releasing" >&2
+            exit 1
+          fi
+
+      - name: Embed Sparkle
+        run: bundle/embed-sparkle.sh target/release/bundle/osx/ProxyBear.app target/sparkle
 
       - name: Ad-hoc code sign and build installation image
         run: |
@@ -112,6 +119,47 @@ jobs:
           test -f "$DMG"
           test -f target/release/bundle/SHA256SUMS
 
+      - name: Sign update and write appcast
+        env:
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+        run: |
+          VERSION="${RELEASE_TAG#v}"
+          APP="target/release/bundle/osx/ProxyBear.app"
+          APP_ZIP="target/release/bundle/ProxyBear-${VERSION}.app.zip"
+          if [ -z "$SPARKLE_ED_PRIVATE_KEY" ]; then
+            echo "The SPARKLE_ED_PRIVATE_KEY secret is not set" >&2
+            exit 1
+          fi
+          # Sparkle compares CFBundleVersion, which cargo-bundle sets to a build timestamp.
+          BUILD="$(plutil -extract CFBundleVersion raw "$APP/Contents/Info.plist")"
+          MIN_OS="$(plutil -extract LSMinimumSystemVersion raw "$APP/Contents/Info.plist")"
+          SIGNATURE="$(printf '%s' "$SPARKLE_ED_PRIVATE_KEY" | target/sparkle/bin/sign_update --ed-key-file - "$APP_ZIP")"
+          case "$SIGNATURE" in
+            *sparkle:edSignature=*length=*) ;;
+            *)
+              echo "Unexpected sign_update output: $SIGNATURE" >&2
+              exit 1
+              ;;
+          esac
+          cat > target/release/bundle/appcast.xml <<EOF
+          <?xml version="1.0" encoding="utf-8"?>
+          <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+            <channel>
+              <title>ProxyBear</title>
+              <item>
+                <title>ProxyBear ${VERSION}</title>
+                <pubDate>$(LC_ALL=C date -u '+%a, %d %b %Y %H:%M:%S +0000')</pubDate>
+                <sparkle:version>${BUILD}</sparkle:version>
+                <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
+                <sparkle:minimumSystemVersion>${MIN_OS}</sparkle:minimumSystemVersion>
+                <sparkle:releaseNotesLink>https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}</sparkle:releaseNotesLink>
+                <enclosure url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/ProxyBear-${VERSION}.app.zip" type="application/octet-stream" ${SIGNATURE} />
+              </item>
+            </channel>
+          </rss>
+          EOF
+          xmllint --noout target/release/bundle/appcast.xml
+
       - name: Verify installation image
         run: |
           DMG="target/release/bundle/dmg/ProxyBear-${RELEASE_TAG#v}.dmg"
@@ -133,6 +181,7 @@ jobs:
             target/release/bundle/ProxyBear-*.app.zip
             target/release/bundle/dmg/ProxyBear-*.dmg
             target/release/bundle/SHA256SUMS
+            target/release/bundle/appcast.xml
           if-no-files-found: error
 
   publish:
@@ -158,6 +207,7 @@ jobs:
             release/ProxyBear-*.app.zip
             release/dmg/ProxyBear-*.dmg
             release/SHA256SUMS
+            release/appcast.xml
           generate_release_notes: true
           fail_on_unmatched_files: true
 
