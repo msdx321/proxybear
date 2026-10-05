@@ -22,20 +22,17 @@ impl AppPaths {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum AuthMethod {
+    // Older versions could save an empty method, which meant key auth.
+    #[default]
+    #[serde(alias = "")]
     Key,
     Password,
 }
 
 impl AuthMethod {
-    pub fn from_config(value: &str) -> Self {
-        match value {
-            "password" => Self::Password,
-            _ => Self::Key,
-        }
-    }
-
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Key => "key",
@@ -104,13 +101,13 @@ pub struct AppConfig {
     #[serde(default = "default_pool_size")]
     pub pool_size: usize,
     #[serde(default)]
-    pub auth_method: String,
+    pub auth_method: AuthMethod,
     pub key_path: String,
     #[serde(default)]
     pub key_password: String,
     #[serde(default)]
     pub ssh_password: String,
-    pub local_addr: String,
+    pub local_addr: SocketAddr,
     #[serde(default)]
     pub autostart: bool,
     #[serde(default)]
@@ -127,11 +124,11 @@ impl Default for AppConfig {
             username: env::var("USER").unwrap_or_default(),
             port: 22,
             pool_size: DEFAULT_POOL_SIZE,
-            auth_method: AuthMethod::Key.as_str().into(),
+            auth_method: AuthMethod::default(),
             key_path: String::new(),
             key_password: String::new(),
             ssh_password: String::new(),
-            local_addr: "127.0.0.1:1080".to_string(),
+            local_addr: SocketAddr::from(([127, 0, 0, 1], 1080)),
             autostart: false,
             auto_connect: false,
             log_level: LogLevel::default(),
@@ -141,14 +138,6 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
-    pub fn auth_method(&self) -> AuthMethod {
-        AuthMethod::from_config(&self.auth_method)
-    }
-
-    pub fn set_auth_method(&mut self, method: AuthMethod) {
-        self.auth_method = method.as_str().to_string();
-    }
-
     pub fn validate_ready(&self) -> Result<()> {
         self.runtime_config().map(|_| ())
     }
@@ -162,7 +151,7 @@ impl AppConfig {
         if username.is_empty() {
             bail!("username is empty");
         }
-        let auth_method = self.auth_method();
+        let auth_method = self.auth_method;
         let key_path = self.key_path.trim();
         if auth_method.requires_key() && key_path.is_empty() {
             bail!("key path is empty");
@@ -172,13 +161,10 @@ impl AppConfig {
             bail!("SSH session count must be between 1 and {MAX_POOL_SIZE}");
         }
 
-        let local_addr = self
-            .local_addr
-            .trim()
-            .parse::<SocketAddr>()
-            .with_context(|| format!("invalid local address {}", self.local_addr))?;
         Ok(RuntimeConfig {
-            listen: ListenConfig { local_addr },
+            listen: ListenConfig {
+                local_addr: self.local_addr,
+            },
             ssh: SshConnectConfig {
                 server: server.to_string(),
                 username: username.to_string(),

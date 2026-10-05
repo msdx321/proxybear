@@ -67,11 +67,11 @@ impl SettingsForm {
             username: config.username.clone(),
             port: config.port.to_string(),
             pool_size: config.pool_size.to_string(),
-            auth_method: config.auth_method(),
+            auth_method: config.auth_method,
             key_path: config.key_path.clone(),
             key_password: config.key_password.clone(),
             ssh_password: config.ssh_password.clone(),
-            local_addr: config.local_addr.clone(),
+            local_addr: config.local_addr.to_string(),
         }
     }
 
@@ -86,11 +86,11 @@ impl SettingsForm {
         config.username = self.username.trim().to_string();
         config.port = port;
         config.pool_size = self.parse_pool_size()?;
-        config.set_auth_method(self.auth_method);
+        config.auth_method = self.auth_method;
         config.key_path = self.key_path.trim().to_string();
         config.key_password.clone_from(&self.key_password);
         config.ssh_password.clone_from(&self.ssh_password);
-        config.local_addr = self.parse_local_addr()?.to_string();
+        config.local_addr = self.parse_local_addr()?;
         Ok(())
     }
 

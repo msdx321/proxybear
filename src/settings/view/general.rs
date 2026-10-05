@@ -91,7 +91,7 @@ impl SettingsView {
                 .into_any_element()
         });
         let overview = [status].into_iter().chain(error).chain([
-            row("SOCKS5 proxy", value(config.local_addr.clone(), cx), cx),
+            row("SOCKS5 proxy", value(config.local_addr.to_string(), cx), cx),
             row("SSH server", value(server, cx), cx),
             row("Traffic", value(traffic(stats), cx), cx),
         ]);
