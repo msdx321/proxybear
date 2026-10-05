@@ -3,7 +3,7 @@ mod config;
 mod proxy;
 mod settings;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
@@ -67,7 +67,7 @@ impl ProxyBear {
             tray,
             menu: MenuPresenter::default(),
             form,
-            active_tab: SettingsTab::Settings,
+            active_tab: SettingsTab::General,
             log_tail,
             log_filter,
             stats_snapshot: StatsSnapshot::default(),
@@ -122,20 +122,12 @@ impl ProxyBear {
             }
             MenuAction::Settings => self.open_settings(cx),
             MenuAction::ToggleAutostart => {
-                let mut config = self.config().clone();
-                config.autostart = !config.autostart;
-                if let Err(error) = config::set_autostart(&self.paths, config.autostart)
-                    .and_then(|()| self.save_config_state(config))
-                {
-                    self.stats.set_error(error.to_string());
-                }
+                let enabled = !self.config().autostart;
+                self.set_autostart(enabled);
             }
             MenuAction::ToggleAutoConnect => {
-                let mut config = self.config().clone();
-                config.auto_connect = !config.auto_connect;
-                if let Err(error) = self.save_config_state(config) {
-                    self.stats.set_error(error.to_string());
-                }
+                let enabled = !self.config().auto_connect;
+                self.set_auto_connect(enabled);
             }
             MenuAction::Quit => {
                 self.stop_proxy(cx);
@@ -175,12 +167,17 @@ impl ProxyBear {
             SettingsField::KeyPassword(v) => self.form.key_password = v,
             SettingsField::SshPassword(v) => self.form.ssh_password = v,
             SettingsField::LocalAddr(v) => self.form.local_addr = v,
+            SettingsField::Autostart(enabled) => self.set_autostart(enabled),
+            SettingsField::AutoConnect(enabled) => self.set_auto_connect(enabled),
             SettingsField::Save | SettingsField::SaveAndStart => {
                 let start = matches!(field, SettingsField::SaveAndStart);
                 match self.save_settings() {
                     Ok(()) => {
-                        self.feedback = Some("Settings saved".into());
+                        self.feedback = Some("Settings saved.".into());
                         if start {
+                            // Stopping first makes a running proxy pick up the
+                            // new settings; the start waits for the old run.
+                            self.stop_proxy(cx);
                             self.start_proxy(cx);
                         }
                     }
@@ -188,11 +185,17 @@ impl ProxyBear {
                 }
                 self.refresh_stats(cx);
             }
+            SettingsField::Revert => {
+                let form = SettingsForm::from_config(&self.config());
+                self.form = form;
+            }
+            SettingsField::Start => self.start_proxy(cx),
             SettingsField::Stop => self.stop_proxy(cx),
             SettingsField::ForgetHostKey => self.forget_host_key(),
             SettingsField::ChooseKey => self.choose_key(),
             SettingsField::OpenLog => self.open_log(),
-            SettingsField::RevealLog => self.reveal_log(),
+            SettingsField::RevealLog => self.reveal(self.log_tail.path()),
+            SettingsField::RevealConfig => self.reveal(&self.paths.config_path),
             SettingsField::ClearLog => {
                 if let Err(error) = self.log_tail.clear() {
                     self.stats
@@ -222,10 +225,10 @@ impl ProxyBear {
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
                         None,
-                        size(px(760.), px(780.)),
+                        size(px(780.), px(640.)),
                         cx,
                     ))),
-                    window_min_size: Some(size(px(640.), px(600.))),
+                    window_min_size: Some(size(px(680.), px(520.))),
                     titlebar: Some(gpui::TitlebarOptions {
                         title: Some("ProxyBear Settings".into()),
                         ..Default::default()
@@ -374,6 +377,24 @@ impl ProxyBear {
         Ok(())
     }
 
+    fn set_autostart(&mut self, enabled: bool) {
+        let mut config = self.config().clone();
+        config.autostart = enabled;
+        if let Err(error) = config::set_autostart(&self.paths, enabled)
+            .and_then(|()| self.save_config_state(config))
+        {
+            self.stats.set_error(error.to_string());
+        }
+    }
+
+    fn set_auto_connect(&mut self, enabled: bool) {
+        let mut config = self.config().clone();
+        config.auto_connect = enabled;
+        if let Err(error) = self.save_config_state(config) {
+            self.stats.set_error(error.to_string());
+        }
+    }
+
     fn forget_host_key(&mut self) {
         let mut config = self.config().clone();
         config.host_fingerprint = None;
@@ -410,36 +431,36 @@ impl ProxyBear {
         }
     }
 
-    fn reveal_log(&mut self) {
-        if let Err(error) = Command::new("open")
-            .arg("-R")
-            .arg(self.log_tail.path())
-            .spawn()
-        {
-            self.stats
-                .set_error(format!("failed to reveal log file: {error}"));
+    fn reveal(&self, path: &Path) {
+        if let Err(error) = Command::new("open").arg("-R").arg(path).spawn() {
+            self.stats.set_error(format!(
+                "failed to show {} in Finder: {error}",
+                path.display()
+            ));
         }
     }
 }
 
 fn main() {
-    gpui_platform::application().run(|cx| {
-        gpui_component::init(cx);
-        settings::init_theme(cx);
-        match ProxyBear::new() {
-            Ok(app) => {
-                let app = cx.new(|_| app);
-                app.update(cx, |app, cx| app.listen(cx));
-                cx.on_app_quit(move |cx| {
-                    app.update(cx, |app, cx| app.stop_proxy(cx));
-                    async {}
-                })
-                .detach();
+    gpui_platform::application()
+        .with_assets(gpui_kit_assets::Assets)
+        .run(|cx| {
+            gpui_component::init(cx);
+            settings::init_theme(cx);
+            match ProxyBear::new() {
+                Ok(app) => {
+                    let app = cx.new(|_| app);
+                    app.update(cx, |app, cx| app.listen(cx));
+                    cx.on_app_quit(move |cx| {
+                        app.update(cx, |app, cx| app.stop_proxy(cx));
+                        async {}
+                    })
+                    .detach();
+                }
+                Err(error) => {
+                    eprintln!("ProxyBear failed to start: {error:#}");
+                    cx.quit();
+                }
             }
-            Err(error) => {
-                eprintln!("ProxyBear failed to start: {error:#}");
-                cx.quit();
-            }
-        }
-    });
+        });
 }

@@ -14,7 +14,8 @@ pub use view::SettingsView;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum SettingsTab {
-    Settings,
+    General,
+    Connection,
     Logs,
 }
 
@@ -31,17 +32,22 @@ pub enum SettingsField {
     KeyPassword(String),
     SshPassword(String),
     LocalAddr(String),
+    Autostart(bool),
+    AutoConnect(bool),
     Save,
     SaveAndStart,
+    Revert,
+    Start,
     Stop,
     ForgetHostKey,
     ChooseKey,
     OpenLog,
     RevealLog,
+    RevealConfig,
     ClearLog,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct SettingsForm {
     pub server: String,
     pub username: String,

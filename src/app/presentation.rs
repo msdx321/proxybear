@@ -46,15 +46,6 @@ impl MenuPresenter {
     }
 }
 
-pub fn settings_status(stats: &StatsSnapshot) -> String {
-    format!(
-        "{} | up {} | down {}",
-        stats.status,
-        format_bytes(stats.bytes_up),
-        format_bytes(stats.bytes_down)
-    )
-}
-
 pub fn icon_state(running: bool, clean: bool) -> TrayIconState {
     if running && clean {
         TrayIconState::Happy
@@ -90,7 +81,7 @@ fn set_menu_text(item: &MenuItem, cached: &mut String, next: impl Into<String>) 
     }
 }
 
-fn format_bytes(bytes: u64) -> String {
+pub fn format_bytes(bytes: u64) -> String {
     const UNITS: [&str; 4] = ["B", "KiB", "MiB", "GiB"];
     let mut size = bytes as f64;
     let mut unit = 0;

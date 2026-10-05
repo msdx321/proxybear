@@ -44,7 +44,7 @@ open target/release/bundle/osx/ProxyBear.app
 
 1. Click the bear icon in the menu bar
 2. Choose **Settings…**
-3. Fill in your SSH server, username, and private key path
+3. On the **Connection** page, fill in your SSH server, username, and private key path
 4. Click **Save and Start**
 
 The proxy listens on `127.0.0.1:1080` by default. Point your browser or tools at `socks5://127.0.0.1:1080`.

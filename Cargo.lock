@@ -5839,6 +5839,7 @@ dependencies = [
  "directories",
  "futures",
  "gpui-component",
+ "gpui-kit-assets",
  "gpui-pre",
  "gpui-pre-platform",
  "native-dialog",
