@@ -10,7 +10,10 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use futures::StreamExt;
-use gpui::{AppContext, Bounds, WindowBounds, WindowHandle, WindowOptions, px, size};
+use gpui::{
+    AppContext, Bounds, PromptButton, PromptLevel, WindowBounds, WindowHandle, WindowOptions, px,
+    size,
+};
 use gpui_component::Root;
 use native_dialog::DialogBuilder;
 
@@ -195,10 +198,7 @@ impl ProxyBear {
                 }
                 self.refresh_stats(cx);
             }
-            SettingsField::Revert => {
-                let form = SettingsForm::from_config(&self.config());
-                self.form = form;
-            }
+            SettingsField::Revert => self.revert_form(),
             SettingsField::Start => self.start_proxy(cx),
             SettingsField::Stop => self.stop_proxy(cx),
             SettingsField::ForgetHostKey => self.forget_host_key(),
@@ -254,12 +254,38 @@ impl ProxyBear {
                 },
                 |window, cx| {
                     let weak = app.downgrade();
-                    window.on_window_should_close(cx, move |_, cx| {
-                        let _ = weak.update(cx, |app, cx| {
-                            app.settings_window = None;
-                            app.refresh_stats(cx);
-                        });
-                        true
+                    window.on_window_should_close(cx, move |window, cx| {
+                        let Some(app) = weak.upgrade() else {
+                            return true;
+                        };
+                        if !app.read(cx).has_unsaved_changes() {
+                            app.update(cx, |app, cx| app.settings_closed(cx));
+                            return true;
+                        }
+                        let answer = window.prompt(
+                            PromptLevel::Warning,
+                            "Save changes to your connection settings?",
+                            Some("Your changes are lost if you don't save them."),
+                            &[
+                                PromptButton::Ok("Save".into()),
+                                PromptButton::Other("Don't Save".into()),
+                                PromptButton::Cancel("Cancel".into()),
+                            ],
+                            cx,
+                        );
+                        let handle = window.window_handle();
+                        cx.spawn(async move |cx| {
+                            let Ok(answer) = answer.await else {
+                                return;
+                            };
+                            let close = app.update(cx, |app, cx| app.resolve_close(answer, cx));
+                            if close {
+                                let _ = handle.update(cx, |_, window, _| window.remove_window());
+                                app.update(cx, |app, cx| app.settings_closed(cx));
+                            }
+                        })
+                        .detach();
+                        false
                     });
                     let view = cx.new(|cx| SettingsView::new(app.clone(), window, cx));
                     cx.new(|cx| Root::new(view, window, cx))
@@ -431,6 +457,44 @@ impl ProxyBear {
             }
             Err(error) => format!("Could not forget host key: {error}"),
         });
+    }
+
+    fn revert_form(&mut self) {
+        let form = SettingsForm::from_config(&self.config());
+        self.form = form;
+    }
+
+    fn has_unsaved_changes(&self) -> bool {
+        self.form != SettingsForm::from_config(&self.config())
+    }
+
+    /// Act on the answer to the unsaved changes prompt: 0 saves, 1 discards,
+    /// anything else cancels. Returns whether the window may close.
+    fn resolve_close(&mut self, answer: usize, cx: &mut gpui::Context<Self>) -> bool {
+        let close = match answer {
+            0 => match self.save_settings() {
+                Ok(()) => true,
+                Err(error) => {
+                    // Keep the window open on the page that shows the error.
+                    self.stats.set_error(error.to_string());
+                    self.active_tab = SettingsTab::Connection;
+                    false
+                }
+            },
+            1 => {
+                self.revert_form();
+                true
+            }
+            _ => false,
+        };
+        self.refresh_stats(cx);
+        cx.notify();
+        close
+    }
+
+    fn settings_closed(&mut self, cx: &mut gpui::Context<Self>) {
+        self.settings_window = None;
+        self.refresh_stats(cx);
     }
 
     fn trust_host_key(&mut self, cx: &mut gpui::Context<Self>) {

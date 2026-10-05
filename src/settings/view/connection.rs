@@ -10,7 +10,7 @@ use gpui_component::{
 use super::{SettingsView, group, input, page_header, row, row_with};
 use crate::{
     config::{AuthMethod, MAX_POOL_SIZE},
-    settings::{SettingsField, SettingsForm},
+    settings::SettingsField,
 };
 
 pub(super) const EXPOSED_WARNING: &str =
@@ -22,14 +22,8 @@ impl SettingsView {
         let form = &app.form;
         let is_key = form.auth_method == AuthMethod::Key;
         let running = app.proxy.is_running();
-        let (saved, host_key) = {
-            let config = app.config();
-            (
-                SettingsForm::from_config(&config),
-                config.host_fingerprint.clone(),
-            )
-        };
-        let dirty = *form != saved;
+        let host_key = app.config().host_fingerprint.clone();
+        let dirty = app.has_unsaved_changes();
         let save_error = form.save_error();
         let connection_error = form.connection_error();
         let can_start = save_error.is_none() && connection_error.is_none();
