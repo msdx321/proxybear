@@ -29,6 +29,8 @@ pub struct SettingsView {
     key_password: Entity<InputState>,
     ssh_password: Entity<InputState>,
     local_addr: Entity<InputState>,
+    log_query: Entity<InputState>,
+    log_filter: logs::LineFilter,
     log_scroll: ScrollHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -36,7 +38,15 @@ pub struct SettingsView {
 impl SettingsView {
     pub fn new(app: Entity<ProxyBear>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let form = app.read(cx).form.clone();
-        let mut subscriptions = vec![cx.observe(&app, |_, _, cx| cx.notify())];
+        let log_query = cx.new(|cx| InputState::new(window, cx).placeholder("Search"));
+        let mut subscriptions = vec![
+            cx.observe(&app, |_, _, cx| cx.notify()),
+            cx.subscribe(&log_query, |_, _, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Change) {
+                    cx.notify();
+                }
+            }),
+        ];
         let mut input = |value: String,
                          placeholder: &'static str,
                          masked: bool,
@@ -85,6 +95,8 @@ impl SettingsView {
                 false,
                 SettingsField::LocalAddr,
             ),
+            log_query,
+            log_filter: logs::LineFilter::default(),
             app,
             view: cx.entity().downgrade(),
             log_scroll: ScrollHandle::new(),
@@ -134,6 +146,20 @@ impl SettingsView {
             if reset_logs {
                 scroll.set_offset(point(px(0.), px(0.)));
             }
+        }
+    }
+
+    /// A click handler that changes view-only state.
+    fn on_view(
+        &self,
+        f: impl Fn(&mut Self, &mut Context<Self>) + 'static,
+    ) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static {
+        let view = self.view.clone();
+        move |_, _, cx| {
+            let _ = view.update(cx, |view, cx| {
+                f(view, cx);
+                cx.notify();
+            });
         }
     }
 

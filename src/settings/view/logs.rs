@@ -1,14 +1,68 @@
 use gpui::{prelude::*, *};
 use gpui_component::{
-    ActiveTheme, IconName, Sizable,
-    button::{ButtonGroup, ButtonVariants},
-    h_flex, v_flex,
+    ActiveTheme, Icon, IconName, Selectable, Sizable,
+    button::{Button, ButtonGroup, ButtonVariants},
+    h_flex,
+    input::Input,
+    v_flex,
 };
 
 use super::{SettingsView, group, page_header, row_with};
 use crate::{config::LogLevel, settings::SettingsField};
 
+/// Which recorded lines the viewer shows. Separate from the log level,
+/// which decides what gets recorded.
+#[derive(Clone, Copy, Default, Eq, PartialEq)]
+pub(super) enum LineFilter {
+    #[default]
+    All,
+    Warnings,
+    Errors,
+}
+
+impl LineFilter {
+    fn shows(self, line: &str) -> bool {
+        // Lines without a level, such as continuations, are always shown.
+        let less_severe: &[&str] = match self {
+            Self::All => &[],
+            Self::Warnings => &["INFO", "DEBUG", "TRACE"],
+            Self::Errors => &["WARN", "INFO", "DEBUG", "TRACE"],
+        };
+        line_level(line).is_none_or(|level| !less_severe.contains(&level))
+    }
+}
+
+/// The level column of a `tracing` line: `<timestamp> <LEVEL> <target>: ...`.
+fn line_level(line: &str) -> Option<&str> {
+    line.split_whitespace().nth(1)
+}
+
 impl SettingsView {
+    /// Lines that pass the filter and search, oldest first.
+    fn visible_log_lines(&self, cx: &App) -> Vec<SharedString> {
+        let query = self.log_query.read(cx).value().trim().to_lowercase();
+        self.app
+            .read(cx)
+            .log_tail
+            .lines()
+            .iter()
+            .filter(|line| {
+                self.log_filter.shows(line)
+                    && (query.is_empty() || line.to_lowercase().contains(&query))
+            })
+            .cloned()
+            .collect()
+    }
+
+    fn copy_log_lines(&self, cx: &mut Context<Self>) {
+        let lines = self.visible_log_lines(cx);
+        cx.write_to_clipboard(ClipboardItem::new_string(lines.join("\n")));
+        self.app.update(cx, |app, cx| {
+            app.feedback = Some(format!("Copied {} lines.", lines.len()));
+            cx.notify();
+        });
+    }
+
     pub(super) fn logs(&self, cx: &App) -> impl IntoElement {
         let app = self.app.read(cx);
         let logs = &app.log_tail;
@@ -17,6 +71,12 @@ impl SettingsView {
             .error()
             .map(str::to_owned)
             .or_else(|| app.stats_snapshot.last_error.clone());
+        let lines = self.visible_log_lines(cx);
+        let empty = if logs.lines().is_empty() {
+            "No log entries yet at the selected level."
+        } else {
+            "No entries match."
+        };
         let levels = ButtonGroup::new("log-level").children(
             [
                 (LogLevel::Error, "Error"),
@@ -35,6 +95,31 @@ impl SettingsView {
                 )
             }),
         );
+        let filters = ButtonGroup::new("line-filter").children(
+            [
+                ("show-all", "All", LineFilter::All),
+                ("show-warnings", "Warnings", LineFilter::Warnings),
+                ("show-errors", "Errors", LineFilter::Errors),
+            ]
+            .into_iter()
+            .map(|(id, label, filter)| {
+                let active = self.log_filter == filter;
+                Button::new(id)
+                    .label(label)
+                    .small()
+                    .selected(active)
+                    .when(active, |button| button.primary())
+                    .on_click(self.on_view(move |view, _| view.log_filter = filter))
+            }),
+        );
+        let action = |id, icon, tooltip, field| {
+            Button::new(id)
+                .icon(icon)
+                .small()
+                .ghost()
+                .tooltip(tooltip)
+                .on_click(self.on_field(field))
+        };
 
         v_flex()
             .size_full()
@@ -49,7 +134,7 @@ impl SettingsView {
                 None,
                 [row_with(
                     "Log level",
-                    "Saved automatically. Applies to new entries.",
+                    "What gets recorded. Saved automatically.",
                     levels,
                     cx,
                 )],
@@ -68,39 +153,16 @@ impl SettingsView {
                     .gap_2()
                     .child(
                         h_flex()
-                            .gap_1()
+                            .gap_2()
                             .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .truncate()
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(logs.path_label().to_owned()),
+                                div().flex_1().min_w_0().child(
+                                    Input::new(&self.log_query)
+                                        .small()
+                                        .prefix(Icon::new(IconName::Search).small())
+                                        .cleanable(true),
+                                ),
                             )
-                            .child(
-                                self.button("open-log", "Open", SettingsField::OpenLog)
-                                    .icon(IconName::ExternalLink)
-                                    .small()
-                                    .ghost(),
-                            )
-                            .child(
-                                self.button(
-                                    "reveal-log",
-                                    "Show in Finder",
-                                    SettingsField::RevealLog,
-                                )
-                                .icon(IconName::FolderOpen)
-                                .small()
-                                .ghost(),
-                            )
-                            .child(
-                                self.button("clear-log", "Clear", SettingsField::ClearLog)
-                                    .icon(IconName::Delete)
-                                    .small()
-                                    .danger()
-                                    .ghost(),
-                            ),
+                            .child(filters),
                     )
                     .child(
                         div()
@@ -116,15 +178,61 @@ impl SettingsView {
                             .bg(cx.theme().secondary)
                             .font_family("Menlo")
                             .text_xs()
-                            .when(logs.lines().is_empty(), |view| {
-                                view.text_color(cx.theme().muted_foreground)
-                                    .child("No log entries yet at the selected level.")
+                            .when(lines.is_empty(), |view| {
+                                view.text_color(cx.theme().muted_foreground).child(empty)
                             })
-                            .children(
-                                logs.lines()
-                                    .iter()
-                                    .rev()
-                                    .map(|line| div().pb_1().child(line.clone())),
+                            .children(lines.into_iter().rev().map(|line| {
+                                let color = match line_level(&line) {
+                                    Some("ERROR") => Some(cx.theme().danger),
+                                    Some("WARN") => Some(cx.theme().warning),
+                                    _ => None,
+                                };
+                                div()
+                                    .pb_1()
+                                    .when_some(color, |line, color| line.text_color(color))
+                                    .child(line)
+                            })),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(logs.path_label().to_owned()),
+                            )
+                            .child(
+                                Button::new("copy-log")
+                                    .icon(IconName::Copy)
+                                    .small()
+                                    .ghost()
+                                    .tooltip("Copy shown lines")
+                                    .on_click(self.on_view(|view, cx| view.copy_log_lines(cx))),
+                            )
+                            .child(action(
+                                "open-log",
+                                IconName::ExternalLink,
+                                "Open log file",
+                                SettingsField::OpenLog,
+                            ))
+                            .child(action(
+                                "reveal-log",
+                                IconName::FolderOpen,
+                                "Show in Finder",
+                                SettingsField::RevealLog,
+                            ))
+                            .child(
+                                action(
+                                    "clear-log",
+                                    IconName::Delete,
+                                    "Clear log",
+                                    SettingsField::ClearLog,
+                                )
+                                .danger(),
                             ),
                     ),
             )
