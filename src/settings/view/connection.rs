@@ -13,6 +13,9 @@ use crate::{
     settings::{SettingsField, SettingsForm},
 };
 
+pub(super) const EXPOSED_WARNING: &str =
+    "Other devices can reach this address and use the proxy without a password.";
+
 impl SettingsView {
     pub(super) fn connection(&self, cx: &App) -> impl IntoElement {
         let app = self.app.read(cx);
@@ -132,7 +135,11 @@ impl SettingsView {
             [
                 row_with(
                     "SOCKS5 address",
-                    "No authentication. Keep it on a loopback address.",
+                    if form.exposes_proxy() {
+                        div().text_color(cx.theme().danger).child(EXPOSED_WARNING)
+                    } else {
+                        div().child("No authentication. Keep it on a loopback address.")
+                    },
                     input(&self.local_addr, 180.),
                     cx,
                 ),

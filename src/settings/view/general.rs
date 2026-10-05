@@ -3,7 +3,10 @@ use gpui_component::{
     ActiveTheme, Icon, IconName, Sizable, button::ButtonVariants, h_flex, v_flex,
 };
 
-use super::{ConnectionState, SettingsView, group, page_header, row, row_with, traffic, value};
+use super::{
+    ConnectionState, SettingsView, connection::EXPOSED_WARNING, group, page_header, row, row_with,
+    traffic, value,
+};
 use crate::settings::{SettingsField, SettingsTab};
 
 impl SettingsView {
@@ -91,7 +94,16 @@ impl SettingsView {
                 .into_any_element()
         });
         let overview = [status].into_iter().chain(error).chain([
-            row("SOCKS5 proxy", value(config.local_addr.to_string(), cx), cx),
+            if config.local_addr.ip().is_loopback() {
+                row("SOCKS5 proxy", value(config.local_addr.to_string(), cx), cx)
+            } else {
+                row_with(
+                    "SOCKS5 proxy",
+                    div().text_color(cx.theme().danger).child(EXPOSED_WARNING),
+                    value(config.local_addr.to_string(), cx),
+                    cx,
+                )
+            },
             row("SSH server", value(server, cx), cx),
             row("Traffic", value(traffic(stats), cx), cx),
         ]);

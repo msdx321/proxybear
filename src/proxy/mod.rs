@@ -53,6 +53,13 @@ pub async fn run_proxy(
         .with_context(|| format!("failed to bind {local_addr}"))?;
 
     tracing::info!(event = "proxy_starting", local_addr = %local_addr, "Proxy starting");
+    if !local_addr.ip().is_loopback() {
+        tracing::warn!(
+            event = "proxy_exposed",
+            local_addr = %local_addr,
+            "Proxy accepts unauthenticated connections from other devices"
+        );
+    }
     stats.set_status("Connecting to SSH server...");
     let pool = Arc::new(Pool::new(
         runtime.pool_size,

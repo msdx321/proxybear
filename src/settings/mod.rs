@@ -102,6 +102,12 @@ impl SettingsForm {
             .map(|error| error.to_string())
     }
 
+    /// Whether the bind address lets other devices use the proxy.
+    pub fn exposes_proxy(&self) -> bool {
+        self.parse_local_addr()
+            .is_ok_and(|addr| !addr.ip().is_loopback())
+    }
+
     pub fn connection_error(&self) -> Option<&'static str> {
         if self.server.trim().is_empty() {
             Some("Enter the SSH server hostname.")
