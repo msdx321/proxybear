@@ -66,7 +66,7 @@ impl SettingsView {
                 row_with(
                     "Host key",
                     div().truncate().child(host_key.clone().unwrap_or_else(|| {
-                        "Not saved yet. Trusted on the next connection.".into()
+                        "Not verified yet. You will be asked on the next connection.".into()
                     })),
                     self.button("forget-host-key", "Forget", SettingsField::ForgetHostKey)
                         .small()

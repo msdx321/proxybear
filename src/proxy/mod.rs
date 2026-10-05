@@ -3,11 +3,7 @@ mod socks;
 mod ssh;
 mod tunnel;
 
-use std::{
-    net::SocketAddr,
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use tokio::{
@@ -17,26 +13,19 @@ use tokio::{
     time::sleep,
 };
 
-use crate::{
-    app::stats::ProxyStats,
-    config::{AppConfig, AppPaths},
-};
+use crate::{app::stats::ProxyStats, config::RuntimeConfig};
 
 use pool::Pool;
 
 const ACCEPT_RETRY_DELAY: Duration = Duration::from_millis(100);
 
+/// Run the proxy with a snapshot of the settings, so every session in the
+/// pool uses the same ones.
 pub async fn run_proxy(
-    config: Arc<Mutex<AppConfig>>,
-    paths: AppPaths,
+    runtime: RuntimeConfig,
     stats: Arc<ProxyStats>,
     mut shutdown: oneshot::Receiver<()>,
 ) -> Result<()> {
-    // Snapshot settings once so every session in the pool uses the same ones.
-    let runtime = config
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .runtime_config()?;
     let local_addr = runtime.listen.local_addr;
 
     let listener = TcpListener::bind(local_addr)
@@ -66,7 +55,7 @@ pub async fn run_proxy(
         Arc::clone(&stats),
         format!("Listening on {local_addr}"),
     ));
-    let connector = ssh::Connector::new(runtime.ssh, Arc::clone(&config), paths);
+    let connector = ssh::Connector::new(runtime.ssh, Arc::clone(&stats));
     let mut supervisors = JoinSet::new();
     for index in 0..runtime.pool_size {
         supervisors.spawn(Arc::clone(&pool).supervise(index, connector.clone()));

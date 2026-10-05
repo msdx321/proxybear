@@ -7,7 +7,10 @@ use super::{
     ConnectionState, SettingsView, connection::EXPOSED_WARNING, group, page_header, row, row_with,
     traffic, value,
 };
-use crate::settings::{SettingsField, SettingsTab};
+use crate::{
+    app::stats::HostKeyPrompt,
+    settings::{SettingsField, SettingsTab},
+};
 
 impl SettingsView {
     pub(super) fn general(&self, cx: &App) -> impl IntoElement {
@@ -121,6 +124,12 @@ impl SettingsView {
                         "Proxy status and what happens at startup.",
                         cx,
                     ))
+                    .children(
+                        stats
+                            .host_key_prompt
+                            .clone()
+                            .map(|prompt| self.host_key_prompt(prompt, running, cx)),
+                    )
                     .child(group(None, overview, cx))
                     .child(group(
                         Some("Startup"),
@@ -166,4 +175,98 @@ impl SettingsView {
                     )),
             )
     }
+
+    fn host_key_prompt(&self, prompt: HostKeyPrompt, running: bool, cx: &App) -> impl IntoElement {
+        let changed = prompt.previous.is_some();
+        let color = if changed {
+            cx.theme().danger
+        } else {
+            cx.theme().warning
+        };
+        let (title, body) = if changed {
+            (
+                "Server identity changed",
+                format!(
+                    "The host key of {} differs from the one you trusted. Servers get new keys when \
+                     they are reinstalled, but this can also mean someone is intercepting the \
+                     connection. Only trust the new key if you know why it changed.",
+                    prompt.server
+                ),
+            )
+        } else {
+            (
+                "Verify server identity",
+                format!(
+                    "This is the first connection to {}. Check that the fingerprint matches the \
+                     server's key, for example with ssh-keygen -lf on the server's \
+                     /etc/ssh/ssh_host_*_key.pub.",
+                    prompt.server
+                ),
+            )
+        };
+        let trust_label = match (changed, running) {
+            (true, _) => "Trust New Key",
+            (false, true) => "Trust and Connect",
+            (false, false) => "Trust",
+        };
+
+        v_flex()
+            .gap_3()
+            .p_4()
+            .rounded_lg()
+            .border_1()
+            .border_color(color)
+            .bg(color.opacity(0.08))
+            .child(
+                h_flex()
+                    .gap_2()
+                    .text_color(color)
+                    .child(Icon::new(IconName::TriangleAlert).size_4())
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(title),
+                    ),
+            )
+            .child(div().text_sm().child(body))
+            .when_some(prompt.previous, |card, previous| {
+                card.child(fingerprint("Trusted key", previous, cx))
+            })
+            .child(fingerprint(
+                if changed { "New key" } else { "Fingerprint" },
+                prompt.fingerprint,
+                cx,
+            ))
+            .child(
+                h_flex()
+                    .justify_end()
+                    .gap_2()
+                    .child(
+                        self.button(
+                            "reject-host-key",
+                            "Don't Trust",
+                            SettingsField::RejectHostKey,
+                        )
+                        .ghost(),
+                    )
+                    .child(
+                        self.button("trust-host-key", trust_label, SettingsField::TrustHostKey)
+                            .when(changed, |button| button.danger())
+                            .when(!changed, |button| button.primary()),
+                    ),
+            )
+    }
+}
+
+fn fingerprint(label: &'static str, fingerprint: String, cx: &App) -> impl IntoElement {
+    v_flex()
+        .gap_0p5()
+        .child(
+            div()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(label),
+        )
+        .child(div().font_family("Menlo").text_xs().child(fingerprint))
 }

@@ -1,8 +1,4 @@
-use std::{
-    fmt,
-    sync::{Arc, Mutex, MutexGuard},
-    time::Duration,
-};
+use std::{fmt, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use russh::{
@@ -11,7 +7,10 @@ use russh::{
 };
 use tokio::{sync::oneshot, time::timeout};
 
-use crate::config::{AppConfig, AppPaths, AuthMethod, SshConnectConfig, save_config};
+use crate::{
+    app::stats::{HostKeyPrompt, ProxyStats},
+    config::{AuthMethod, SshConnectConfig},
+};
 
 const SSH_CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const SSH_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
@@ -26,11 +25,7 @@ pub struct Client {
 #[derive(Clone)]
 pub struct Connector {
     ssh: SshConnectConfig,
-    config: Arc<Mutex<AppConfig>>,
-    paths: AppPaths,
-    /// Host key every session of this run must present. Kept separately from
-    /// the config, which may already describe a different server.
-    host_fingerprint: Arc<Mutex<Option<String>>>,
+    stats: Arc<ProxyStats>,
 }
 
 /// A connect failure that retrying with the same settings is unlikely to fix,
@@ -51,14 +46,8 @@ pub fn is_fatal(error: &anyhow::Error) -> bool {
 }
 
 impl Connector {
-    pub fn new(ssh: SshConnectConfig, config: Arc<Mutex<AppConfig>>, paths: AppPaths) -> Self {
-        let host_fingerprint = lock(&config).host_fingerprint.clone();
-        Self {
-            ssh,
-            config,
-            paths,
-            host_fingerprint: Arc::new(Mutex::new(host_fingerprint)),
-        }
+    pub fn new(ssh: SshConnectConfig, stats: Arc<ProxyStats>) -> Self {
+        Self { ssh, stats }
     }
 
     /// Connect and authenticate an SSH session.
@@ -107,7 +96,7 @@ impl Connector {
                     Some(russh::Error::UnknownKey)
                 ) {
                     FatalError(format!(
-                        "SSH host key for {} does not match the saved fingerprint",
+                        "SSH host key for {} is not trusted; verify it in Settings",
                         ssh.server
                     ))
                     .into()
@@ -201,29 +190,25 @@ impl client::Handler for Client {
             .public_key()
             .fingerprint(HashAlg::Sha256)
             .to_string();
-        let connector = &self.connector;
-        let mut pinned = lock(&connector.host_fingerprint);
-        if let Some(expected) = pinned.as_ref() {
-            return Ok(expected == &fingerprint);
+        let ssh = &self.connector.ssh;
+        if ssh.host_fingerprint.as_ref() == Some(&fingerprint) {
+            return Ok(true);
         }
-        *pinned = Some(fingerprint.clone());
-
-        // Trust on first use, but only save the key while the settings still
-        // point at the server this run connects to.
-        let mut config = lock(&connector.config);
-        if config.server.trim() == connector.ssh.server
-            && config.port == connector.ssh.port
-            && config.host_fingerprint.is_none()
-        {
-            config.host_fingerprint = Some(fingerprint);
-            save_config(&connector.paths, &config)?;
-        }
-        Ok(true)
+        // Unknown or changed keys are refused until the user trusts them.
+        tracing::warn!(
+            event = "ssh_host_key_untrusted",
+            server = %ssh.server,
+            fingerprint = %fingerprint,
+            changed = ssh.host_fingerprint.is_some(),
+            "SSH host key is not trusted"
+        );
+        self.connector
+            .stats
+            .set_host_key_prompt(Some(HostKeyPrompt {
+                server: format!("{}:{}", ssh.server, ssh.port),
+                fingerprint,
+                previous: ssh.host_fingerprint.clone(),
+            }));
+        Ok(false)
     }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }

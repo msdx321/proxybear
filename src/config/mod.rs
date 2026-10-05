@@ -61,6 +61,8 @@ pub struct SshConnectConfig {
     pub key_path: String,
     pub key_password: String,
     pub ssh_password: String,
+    /// The trusted host key, if one was saved.
+    pub host_fingerprint: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -178,6 +180,7 @@ impl AppConfig {
                 key_path: key_path.to_string(),
                 key_password: self.key_password.clone(),
                 ssh_password: self.ssh_password.clone(),
+                host_fingerprint: self.host_fingerprint.clone(),
             },
             pool_size: self.pool_size,
         })

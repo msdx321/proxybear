@@ -14,6 +14,17 @@ pub struct ProxyStats {
     bytes_down: AtomicU64,
     status: Mutex<String>,
     last_error: Mutex<Option<String>>,
+    host_key_prompt: Mutex<Option<HostKeyPrompt>>,
+}
+
+/// A server key the user has not trusted yet.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HostKeyPrompt {
+    /// `host:port` the key was presented for.
+    pub server: String,
+    pub fingerprint: String,
+    /// The saved key it replaces, when the server's key changed.
+    pub previous: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -23,6 +34,7 @@ pub struct StatsSnapshot {
     pub bytes_down: u64,
     pub status: String,
     pub last_error: Option<String>,
+    pub host_key_prompt: Option<HostKeyPrompt>,
 }
 
 static STATS_TX: Mutex<Option<mpsc::Sender<()>>> = Mutex::new(None);
@@ -49,6 +61,14 @@ impl ProxyStats {
     pub fn clear_error(&self) {
         let mut current = lock(&self.last_error);
         if current.take().is_some() {
+            notify_changed();
+        }
+    }
+
+    pub fn set_host_key_prompt(&self, prompt: Option<HostKeyPrompt>) {
+        let mut current = lock(&self.host_key_prompt);
+        if *current != prompt {
+            *current = prompt;
             notify_changed();
         }
     }
@@ -80,6 +100,7 @@ impl ProxyStats {
             bytes_down: self.bytes_down.load(Ordering::Relaxed),
             status: lock(&self.status).clone(),
             last_error: lock(&self.last_error).clone(),
+            host_key_prompt: lock(&self.host_key_prompt).clone(),
         }
     }
 }

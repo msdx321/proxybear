@@ -40,6 +40,8 @@ pub enum SettingsField {
     Start,
     Stop,
     ForgetHostKey,
+    TrustHostKey,
+    RejectHostKey,
     ChooseKey,
     OpenLog,
     RevealLog,

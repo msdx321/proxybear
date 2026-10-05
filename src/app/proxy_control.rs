@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use tokio::{
@@ -6,10 +6,7 @@ use tokio::{
     sync::oneshot,
 };
 
-use crate::{
-    config::{AppConfig, AppPaths},
-    proxy,
-};
+use crate::{config::AppConfig, proxy};
 
 use super::stats::ProxyStats;
 
@@ -57,18 +54,14 @@ impl ProxyController {
     /// already running or the start waits for the previous run to stop.
     pub fn start(
         &mut self,
-        config: Arc<Mutex<AppConfig>>,
-        paths: AppPaths,
+        config: &AppConfig,
         stats: Arc<ProxyStats>,
     ) -> Result<Option<tokio::task::JoinHandle<Result<()>>>> {
         if self.is_running() {
             return Ok(None);
         }
 
-        config
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .validate_ready()?;
+        let runtime = config.runtime_config()?;
         if self.task_alive {
             self.start_pending = true;
             return Ok(None);
@@ -78,7 +71,7 @@ impl ProxyController {
         stats.clear_error();
         let task = self
             .runtime
-            .spawn(proxy::run_proxy(config, paths, stats, shutdown_rx));
+            .spawn(proxy::run_proxy(runtime, stats, shutdown_rx));
         self.shutdown = Some(shutdown_tx);
         self.task_alive = true;
         Ok(Some(task))

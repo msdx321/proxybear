@@ -202,6 +202,13 @@ impl ProxyBear {
             SettingsField::Start => self.start_proxy(cx),
             SettingsField::Stop => self.stop_proxy(cx),
             SettingsField::ForgetHostKey => self.forget_host_key(),
+            SettingsField::TrustHostKey => self.trust_host_key(cx),
+            SettingsField::RejectHostKey => {
+                self.stats.set_host_key_prompt(None);
+                self.stop_proxy(cx);
+                self.stats
+                    .set_error("Stopped because the server's host key was not trusted.");
+            }
             SettingsField::ChooseKey => self.choose_key(),
             SettingsField::OpenLog => self.open_log(),
             SettingsField::RevealLog => self.reveal(self.log_tail.path()),
@@ -286,11 +293,18 @@ impl ProxyBear {
         let config = self.config.lock().unwrap_or_else(|e| e.into_inner());
         self.menu.update_tray(&self.tray, &config, &stats, running);
         drop(config);
+        let host_key_prompted =
+            stats.host_key_prompt.is_some() && self.stats_snapshot.host_key_prompt.is_none();
         if stats != self.stats_snapshot {
             self.stats_snapshot = stats;
             cx.notify();
         }
         self.sync_refresh_tasks(cx);
+        if host_key_prompted {
+            // The proxy cannot connect until the user decides, so ask now.
+            self.active_tab = SettingsTab::General;
+            self.open_settings(cx);
+        }
     }
 
     fn sync_refresh_tasks(&mut self, cx: &mut gpui::Context<Self>) {
@@ -338,11 +352,8 @@ impl ProxyBear {
 
 impl ProxyBear {
     fn start_proxy(&mut self, cx: &mut gpui::Context<Self>) {
-        match self.proxy.start(
-            Arc::clone(&self.config),
-            self.paths.clone(),
-            Arc::clone(&self.stats),
-        ) {
+        let config = self.config().clone();
+        match self.proxy.start(&config, Arc::clone(&self.stats)) {
             Ok(Some(task)) => {
                 cx.spawn(async move |this, cx| {
                     let result = task
@@ -412,13 +423,37 @@ impl ProxyBear {
         config.host_fingerprint = None;
         self.feedback = Some(match self.save_config_state(config) {
             Ok(()) if self.proxy.is_running() => {
-                "Host key forgotten. Restart the proxy to trust the server's current key.".into()
+                "Host key forgotten. Restart the proxy to verify the server's current key.".into()
             }
             Ok(()) => {
-                "Host key forgotten. The server's key is saved on the next connection.".into()
+                "Host key forgotten. You will verify the server's key on the next connection."
+                    .into()
             }
             Err(error) => format!("Could not forget host key: {error}"),
         });
+    }
+
+    fn trust_host_key(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(prompt) = self.stats.snapshot().host_key_prompt else {
+            return;
+        };
+        self.stats.set_host_key_prompt(None);
+        let mut config = self.config().clone();
+        if prompt.server != format!("{}:{}", config.server, config.port) {
+            self.feedback = Some("The server settings changed. Connect again to verify.".into());
+            return;
+        }
+        config.host_fingerprint = Some(prompt.fingerprint);
+        if let Err(error) = self.save_config_state(config) {
+            self.stats
+                .set_error(format!("Could not save host key: {error}"));
+            return;
+        }
+        // Each run keeps the key it started with, so restart to use this one.
+        if self.proxy.is_running() {
+            self.stop_proxy(cx);
+            self.start_proxy(cx);
+        }
     }
 
     fn config(&self) -> MutexGuard<'_, AppConfig> {
