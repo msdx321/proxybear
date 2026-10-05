@@ -48,12 +48,22 @@ impl ProxyBear {
     fn new() -> Result<Self> {
         platform::activate_as_accessory();
         let paths = app_paths().context("app paths")?;
-        let config = load_config(&paths).context("load config")?;
+        let mut config = load_config(&paths).context("load config")?;
         let log_filter =
             logging::init(&paths.config_dir, config.log_level).context("initialize logging")?;
         tracing::info!(event = "app_started", "ProxyBear starting");
         let stats = Arc::new(ProxyStats::default());
         stats.set_status("Stopped");
+        // Unchanged secrets are never written back, so a failed read here
+        // cannot erase what the Keychain holds.
+        if let Err(error) = config::load_secrets(&paths, &mut config) {
+            tracing::warn!(
+                event = "keychain_read_failed",
+                error = format!("{error:#}"),
+                "Failed to load secrets"
+            );
+            stats.set_error(format!("{error:#}"));
+        }
         let proxy = ProxyController::new().context("create proxy controller")?;
         let tray = TrayMenu::new(&paths, config.auto_connect).context("tray menu")?;
         let config_path = paths.config_path.display().to_string();
@@ -365,8 +375,10 @@ impl ProxyBear {
     }
 
     fn save_settings(&self) -> Result<()> {
-        let mut config = self.config().clone();
+        let old = self.config().clone();
+        let mut config = old.clone();
         self.form.apply_to_config(&mut config)?;
+        config::save_secrets(&old, &config)?;
         self.save_config_state(config)
     }
 

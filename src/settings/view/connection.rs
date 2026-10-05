@@ -108,13 +108,18 @@ impl SettingsView {
                 ),
                 row_with(
                     "Passphrase",
-                    "Leave empty if the key is not encrypted.",
+                    "Leave empty if the key is not encrypted. Stored in your Keychain.",
                     masked(&self.key_password),
                     cx,
                 ),
             ]
         } else {
-            vec![row("Password", masked(&self.ssh_password), cx)]
+            vec![row_with(
+                "Password",
+                "Stored in your Keychain.",
+                masked(&self.ssh_password),
+                cx,
+            )]
         };
         let auth = group(
             Some("Authentication"),

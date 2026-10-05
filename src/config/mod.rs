@@ -1,4 +1,6 @@
-use std::{env, fs, net::SocketAddr, path::PathBuf};
+mod keychain;
+
+use std::{env, fs, io::Write, net::SocketAddr, path::PathBuf};
 
 use anyhow::{Context, Result, bail};
 use auto_launch::{AutoLaunch, AutoLaunchBuilder, MacOSLaunchMode, WindowsEnableMode};
@@ -103,9 +105,12 @@ pub struct AppConfig {
     #[serde(default)]
     pub auth_method: AuthMethod,
     pub key_path: String,
-    #[serde(default)]
+    /// Kept in the Keychain. Older versions saved it in the file, so it is
+    /// still read from there once to migrate it.
+    #[serde(default, skip_serializing)]
     pub key_password: String,
-    #[serde(default)]
+    /// Kept in the Keychain, like `key_password`.
+    #[serde(default, skip_serializing)]
     pub ssh_password: String,
     pub local_addr: SocketAddr,
     #[serde(default)]
@@ -203,10 +208,45 @@ pub fn load_config(paths: &AppPaths) -> Result<AppConfig> {
     Ok(config)
 }
 
+/// Write the config file, readable only by the user. Secrets are left out;
+/// see [`save_secrets`].
 pub fn save_config(paths: &AppPaths, config: &AppConfig) -> Result<()> {
     fs::create_dir_all(&paths.config_dir).context("failed to create config directory")?;
     let text = toml::to_string_pretty(config).context("failed to serialize config")?;
-    fs::write(&paths.config_path, text).context("failed to write config")
+    // A temporary file is created with mode 0600 and renamed into place, so
+    // a crash never leaves a half-written config behind.
+    let mut file = tempfile::NamedTempFile::new_in(&paths.config_dir)
+        .context("failed to create temporary config file")?;
+    file.write_all(text.as_bytes())
+        .and_then(|()| file.as_file().sync_all())
+        .context("failed to write config")?;
+    file.persist(&paths.config_path)
+        .context("failed to replace config")?;
+    Ok(())
+}
+
+/// Fill in the secrets from the Keychain, first moving any that an older
+/// version left in the config file.
+pub fn load_secrets(paths: &AppPaths, config: &mut AppConfig) -> Result<()> {
+    if !config.ssh_password.is_empty() || !config.key_password.is_empty() {
+        keychain::set(keychain::SSH_PASSWORD, &config.ssh_password)?;
+        keychain::set(keychain::KEY_PASSPHRASE, &config.key_password)?;
+        return save_config(paths, config).context("failed to remove secrets from config");
+    }
+    config.ssh_password = keychain::get(keychain::SSH_PASSWORD)?;
+    config.key_password = keychain::get(keychain::KEY_PASSPHRASE)?;
+    Ok(())
+}
+
+/// Store the secrets that differ between `old` and `new` in the Keychain.
+pub fn save_secrets(old: &AppConfig, new: &AppConfig) -> Result<()> {
+    if new.ssh_password != old.ssh_password {
+        keychain::set(keychain::SSH_PASSWORD, &new.ssh_password)?;
+    }
+    if new.key_password != old.key_password {
+        keychain::set(keychain::KEY_PASSPHRASE, &new.key_password)?;
+    }
+    Ok(())
 }
 
 pub fn is_autostart_enabled(_paths: &AppPaths) -> bool {
