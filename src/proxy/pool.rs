@@ -139,7 +139,7 @@ impl Pool {
                     };
                     session.dead.store(true, Ordering::Relaxed);
                     self.set_slot(index, None);
-                    tracing::warn!(
+                    tracing::info!(
                         event = "ssh_session_lost",
                         slot = index,
                         reason,
