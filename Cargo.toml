@@ -41,5 +41,5 @@ icon = ["bundle/ProxyBear.icns"]
 category = "public.app-category.utilities"
 short_description = "Menu-bar SSH SOCKS proxy."
 long_description = "A native macOS menu-bar app that runs an unauthenticated local SOCKS proxy over SSH."
-osx_minimum_system_version = "11.0"
+osx_minimum_system_version = "14.0"
 osx_info_plist_exts = ["bundle/macos-info.plist"]

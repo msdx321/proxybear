@@ -201,6 +201,26 @@ jobs:
           name: ProxyBear-${{ env.RELEASE_TAG }}-release-artifacts
           path: release
 
+      - name: Checkout release notes renderer
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+          path: source
+
+      - uses: astral-sh/setup-uv@v10.0.1
+
+      - name: Prepare release notes for Sparkle and GitHub
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body > release/release-notes.md; then
+            gh api --method POST "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+              -f tag_name="$RELEASE_TAG" --jq .body > release/release-notes.md
+          fi
+          cd source
+          uv run --no-project bundle/render-release-notes.py ../release/release-notes.md ../release/appcast.xml
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
@@ -210,7 +230,8 @@ jobs:
             release/dmg/ProxyBear-*.dmg
             release/SHA256SUMS
             release/appcast.xml
-          generate_release_notes: true
+          body_path: release/release-notes.md
+          draft: false
           fail_on_unmatched_files: true
 
   update-tap:

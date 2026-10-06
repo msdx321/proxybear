@@ -21,7 +21,7 @@ A native macOS menu-bar app that runs a local SOCKS5 proxy over SSH.
 brew install --cask msdx321/tap/proxybear
 ```
 
-The current release requires Apple Silicon and macOS 11 or later.
+ProxyBear requires Apple Silicon and macOS 14 Sonoma or later.
 Run `brew update` followed by `brew upgrade --cask msdx321/tap/proxybear` to update.
 
 ### DMG
