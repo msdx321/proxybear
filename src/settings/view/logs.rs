@@ -1,4 +1,5 @@
 use gpui::{prelude::*, *};
+use gpui_base::SelectableText;
 use gpui_component::{
     ActiveTheme, Icon, IconName, Selectable, Sizable,
     button::{Button, ButtonGroup, ButtonVariants},
@@ -72,6 +73,7 @@ impl SettingsView {
             .map(str::to_owned)
             .or_else(|| app.stats_snapshot.last_error.clone());
         let lines = self.visible_log_lines(cx);
+        let log_focus = self.log_focus.clone();
         let empty = if logs.lines().is_empty() {
             "No log entries yet at the selected level."
         } else {
@@ -124,7 +126,7 @@ impl SettingsView {
         v_flex()
             .size_full()
             .p_6()
-            .gap_5()
+            .gap_4()
             .child(page_header(
                 "Logs",
                 format!("{} · newest first", logs.status()),
@@ -132,12 +134,7 @@ impl SettingsView {
             ))
             .child(group(
                 None,
-                [row_with(
-                    "Log level",
-                    "What gets recorded. Saved automatically.",
-                    levels,
-                    cx,
-                )],
+                [row_with("Log level", "Saved automatically.", levels, cx)],
                 cx,
             ))
             .when_some(app.feedback.clone(), |view, feedback| {
@@ -167,6 +164,11 @@ impl SettingsView {
                     .child(
                         div()
                             .id("logs-scroll")
+                            .track_focus(&self.log_focus)
+                            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                log_focus.focus(window, cx);
+                            })
+                            .cursor_text()
                             .track_scroll(&self.log_scroll)
                             .overflow_y_scroll()
                             .flex_1()
@@ -175,22 +177,23 @@ impl SettingsView {
                             .rounded_lg()
                             .border_1()
                             .border_color(cx.theme().border)
-                            .bg(cx.theme().secondary)
+                            .bg(cx.theme().muted)
                             .font_family("Menlo")
                             .text_xs()
                             .when(lines.is_empty(), |view| {
                                 view.text_color(cx.theme().muted_foreground).child(empty)
                             })
-                            .children(lines.into_iter().rev().map(|line| {
+                            .children(lines.into_iter().enumerate().rev().map(|(index, line)| {
                                 let color = match line_level(&line) {
                                     Some("ERROR") => Some(cx.theme().danger),
                                     Some("WARN") => Some(cx.theme().warning),
                                     _ => None,
                                 };
                                 div()
+                                    .id(("log-entry", index))
                                     .pb_1()
                                     .when_some(color, |line, color| line.text_color(color))
-                                    .child(line)
+                                    .child(SelectableText::new(line.clone(), line))
                             })),
                     )
                     .child(
@@ -201,7 +204,7 @@ impl SettingsView {
                                     .flex_1()
                                     .min_w_0()
                                     .truncate()
-                                    .text_xs()
+                                    .text_size(px(11.))
                                     .text_color(cx.theme().muted_foreground)
                                     .child(logs.path_label().to_owned()),
                             )

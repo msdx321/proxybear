@@ -32,6 +32,7 @@ pub struct SettingsView {
     log_query: Entity<InputState>,
     log_filter: logs::LineFilter,
     log_scroll: ScrollHandle,
+    log_focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -100,6 +101,7 @@ impl SettingsView {
             app,
             view: cx.entity().downgrade(),
             log_scroll: ScrollHandle::new(),
+            log_focus: cx.focus_handle(),
             _subscriptions: subscriptions,
         }
     }
@@ -201,14 +203,15 @@ impl SettingsView {
         let active = self.app.read(cx).active_tab == tab;
         h_flex()
             .id(id)
-            .gap_2()
-            .px_2()
-            .py_1p5()
+            .gap_2p5()
+            .px_3()
+            .py_2()
             .rounded_md()
-            .text_sm()
+            .text_size(px(13.))
             .cursor_pointer()
             .when(active, |item| {
                 item.bg(cx.theme().accent)
+                    .font_weight(FontWeight::MEDIUM)
                     .text_color(cx.theme().accent_foreground)
             })
             .when(!active, |item| {
@@ -224,7 +227,7 @@ impl SettingsView {
         let stats = &app.stats_snapshot;
         let state = ConnectionState::of(stats, app.proxy.is_running());
         v_flex()
-            .w(px(196.))
+            .w(px(180.))
             .h_full()
             .flex_shrink_0()
             .p_3()
@@ -234,9 +237,9 @@ impl SettingsView {
             .border_color(cx.theme().border)
             .child(
                 div()
-                    .px_2()
-                    .pt_1()
-                    .pb_3()
+                    .px_3()
+                    .pt_2()
+                    .pb_4()
                     .text_base()
                     .font_weight(FontWeight::SEMIBOLD)
                     .child("ProxyBear"),
@@ -271,13 +274,13 @@ impl SettingsView {
                     .child(
                         h_flex()
                             .gap_2()
-                            .text_sm()
+                            .text_size(px(13.))
                             .child(div().size_2().rounded_full().bg(state.color(cx)))
                             .child(state.label()),
                     )
                     .child(
                         div()
-                            .text_xs()
+                            .text_size(px(11.))
                             .text_color(cx.theme().muted_foreground)
                             .child(traffic(stats)),
                     ),
@@ -375,7 +378,7 @@ fn page_header(
         )
         .child(
             div()
-                .text_sm()
+                .text_xs()
                 .text_color(cx.theme().muted_foreground)
                 .child(description.into()),
         )
@@ -446,7 +449,12 @@ fn row_inner(
                 .flex_1()
                 .min_w_0()
                 .gap_0p5()
-                .child(div().text_sm().child(label))
+                .child(
+                    div()
+                        .text_size(px(13.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(label),
+                )
                 .when_some(description, |label, description| {
                     label.child(
                         div()

@@ -5838,6 +5838,7 @@ dependencies = [
  "auto-launch",
  "directories",
  "futures",
+ "gpui-base",
  "gpui-component",
  "gpui-kit-assets",
  "gpui-pre",
