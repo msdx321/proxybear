@@ -28,7 +28,8 @@ pub struct SettingsView {
     key_path: Entity<InputState>,
     key_password: Entity<InputState>,
     ssh_password: Entity<InputState>,
-    local_addr: Entity<InputState>,
+    local_ip: Entity<InputState>,
+    local_port: Entity<InputState>,
     log_query: Entity<InputState>,
     log_filter: logs::LineFilter,
     log_scroll: ScrollHandle,
@@ -90,12 +91,8 @@ impl SettingsView {
                 true,
                 SettingsField::SshPassword,
             ),
-            local_addr: input(
-                form.local_addr,
-                "127.0.0.1:1080",
-                false,
-                SettingsField::LocalAddr,
-            ),
+            local_ip: input(form.local_ip, "127.0.0.1", false, SettingsField::LocalIp),
+            local_port: input(form.local_port, "1080", false, SettingsField::LocalPort),
             log_query,
             log_filter: logs::LineFilter::default(),
             app,
@@ -118,7 +115,8 @@ impl SettingsView {
             (&self.key_path, form.key_path),
             (&self.key_password, form.key_password),
             (&self.ssh_password, form.ssh_password),
-            (&self.local_addr, form.local_addr),
+            (&self.local_ip, form.local_ip),
+            (&self.local_port, form.local_port),
         ] {
             input.update(cx, |input, cx| {
                 if input.value() != value {

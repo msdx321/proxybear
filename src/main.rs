@@ -186,7 +186,8 @@ impl ProxyBear {
             SettingsField::KeyPath(v) => self.form.key_path = v,
             SettingsField::KeyPassword(v) => self.form.key_password = v,
             SettingsField::SshPassword(v) => self.form.ssh_password = v,
-            SettingsField::LocalAddr(v) => self.form.local_addr = v,
+            SettingsField::LocalIp(v) => self.form.local_ip = v,
+            SettingsField::LocalPort(v) => self.form.local_port = v,
             SettingsField::Autostart(enabled) => self.set_autostart(enabled),
             SettingsField::AutoConnect(enabled) => self.set_auto_connect(enabled),
             SettingsField::Save | SettingsField::SaveAndStart => {

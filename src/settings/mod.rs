@@ -2,7 +2,7 @@ mod log_tail;
 mod theme;
 mod view;
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 
 use anyhow::{Context, Result};
 
@@ -31,7 +31,8 @@ pub enum SettingsField {
     KeyPath(String),
     KeyPassword(String),
     SshPassword(String),
-    LocalAddr(String),
+    LocalIp(String),
+    LocalPort(String),
     Autostart(bool),
     AutoConnect(bool),
     Save,
@@ -60,7 +61,8 @@ pub struct SettingsForm {
     pub key_path: String,
     pub key_password: String,
     pub ssh_password: String,
-    pub local_addr: String,
+    pub local_ip: String,
+    pub local_port: String,
 }
 
 impl SettingsForm {
@@ -74,7 +76,8 @@ impl SettingsForm {
             key_path: config.key_path.clone(),
             key_password: config.key_password.clone(),
             ssh_password: config.ssh_password.clone(),
-            local_addr: config.local_addr.to_string(),
+            local_ip: config.local_addr.ip().to_string(),
+            local_port: config.local_addr.port().to_string(),
         }
     }
 
@@ -107,8 +110,10 @@ impl SettingsForm {
 
     /// Whether the bind address lets other devices use the proxy.
     pub fn exposes_proxy(&self) -> bool {
-        self.parse_local_addr()
-            .is_ok_and(|addr| !addr.ip().is_loopback())
+        self.local_ip
+            .trim()
+            .parse::<IpAddr>()
+            .is_ok_and(|ip| !ip.is_loopback())
     }
 
     pub fn connection_error(&self) -> Option<&'static str> {
@@ -141,9 +146,14 @@ impl SettingsForm {
     }
 
     fn parse_local_addr(&self) -> Result<SocketAddr> {
-        let local_addr = self.local_addr.trim();
-        local_addr
+        let local_ip = self.local_ip.trim();
+        let ip = local_ip
             .parse()
-            .with_context(|| format!("invalid SOCKS bind address {local_addr}"))
+            .with_context(|| format!("invalid SOCKS bind IP address {local_ip}"))?;
+        let local_port = self.local_port.trim();
+        let port = local_port
+            .parse()
+            .with_context(|| format!("invalid SOCKS port {local_port}"))?;
+        Ok(SocketAddr::new(ip, port))
     }
 }

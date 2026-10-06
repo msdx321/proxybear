@@ -134,9 +134,10 @@ impl SettingsView {
                     } else {
                         div().child("No authentication. Keep it on a loopback address.")
                     },
-                    input(&self.local_addr, 180.),
+                    input(&self.local_ip, 180.),
                     cx,
                 ),
+                row("SOCKS5 port", input(&self.local_port, 80.), cx),
                 row_with(
                     "SSH sessions",
                     format!(
