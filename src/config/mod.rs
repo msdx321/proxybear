@@ -4,7 +4,7 @@ use std::{env, fs, io::Write, net::SocketAddr, path::PathBuf};
 
 use anyhow::{Context, Result, bail};
 use auto_launch::{AutoLaunch, AutoLaunchBuilder, MacOSLaunchMode, WindowsEnableMode};
-use directories::ProjectDirs;
+use directories::{BaseDirs, ProjectDirs};
 use serde::{Deserialize, Serialize};
 
 const APP_ID: &str = "com.msdx321.proxybear";
@@ -177,7 +177,7 @@ impl AppConfig {
                 username: username.to_string(),
                 port: self.port,
                 auth_method,
-                key_path: key_path.to_string(),
+                key_path: expand_home(key_path),
                 key_password: self.key_password.clone(),
                 ssh_password: self.ssh_password.clone(),
                 host_fingerprint: self.host_fingerprint.clone(),
@@ -185,6 +185,17 @@ impl AppConfig {
             pool_size: self.pool_size,
         })
     }
+}
+
+/// Expand a leading `~` to the home directory, as a shell would.
+pub fn expand_home(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix('~')
+        && (rest.is_empty() || rest.starts_with('/'))
+        && let Some(dirs) = BaseDirs::new()
+    {
+        return format!("{}{rest}", dirs.home_dir().display());
+    }
+    path.to_string()
 }
 
 fn default_pool_size() -> usize {

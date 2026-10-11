@@ -542,7 +542,10 @@ impl ProxyBear {
     fn choose_key(&mut self) {
         let current = self.form.key_path.clone();
         let mut builder = DialogBuilder::file().set_title("Choose SSH private key");
-        if let Some(parent) = PathBuf::from(&current).parent().filter(|p| p.exists()) {
+        if let Some(parent) = PathBuf::from(config::expand_home(&current))
+            .parent()
+            .filter(|p| p.exists())
+        {
             builder = builder.set_location(parent);
         }
         if let Ok(Some(path)) = builder.open_single_file().show() {
