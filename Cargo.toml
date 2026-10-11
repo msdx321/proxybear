@@ -17,7 +17,7 @@ gpui-platform = { package = "gpui-pre-platform", version = "0.3.4", features = [
 native-dialog = "0.9.7"
 objc2 = "0.6.4"
 open = "5.3.6"
-russh = "0.63.1"
+russh = "0.64.1"
 security-framework = "3.7"
 serde = { version = "1.0", features = ["derive"] }
 tempfile = "3.27"
