@@ -5,7 +5,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const ICON_SIZE: u32 = 32;
+// tray-icon draws one point per pixel and caps the height at 22pt, so render the bear at
+// 18pt for Retina (36px) and pad it to 44px tall to have the cap scale it by half.
+const ICON_WIDTH: u32 = 36;
+const ICON_HEIGHT: u32 = 44;
 const MOUTH_PATH: &str = "M10 13a2 2 0 1 0 4 0h2a4 4 0 1 1-8 0h2z";
 type BuildResult<T> = Result<T, Box<dyn Error>>;
 
@@ -50,9 +53,10 @@ fn write_icon(svg: &str, path: &Path) -> BuildResult<()> {
 fn render_rgba(svg: &str) -> BuildResult<Vec<u8>> {
     let tree = resvg::usvg::Tree::from_data(svg.as_bytes(), &resvg::usvg::Options::default())?;
     let source_size = tree.size().to_int_size();
-    let scale = ICON_SIZE as f32 / source_size.width() as f32;
-    let transform = resvg::tiny_skia::Transform::from_scale(scale, scale);
-    let mut pixmap = resvg::tiny_skia::Pixmap::new(ICON_SIZE, ICON_SIZE)
+    let scale = ICON_WIDTH as f32 / source_size.width() as f32;
+    let transform = resvg::tiny_skia::Transform::from_scale(scale, scale)
+        .post_translate(0.0, (ICON_HEIGHT - ICON_WIDTH) as f32 / 2.0);
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(ICON_WIDTH, ICON_HEIGHT)
         .ok_or_else(|| io::Error::other("failed to create icon pixmap"))?;
 
     resvg::render(&tree, transform, &mut pixmap.as_mut());
