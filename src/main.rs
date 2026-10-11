@@ -560,7 +560,7 @@ impl ProxyBear {
     }
 
     fn reveal(&self, path: &Path) {
-        if let Err(error) = Command::new("open").arg("-R").arg(path).spawn() {
+        if let Err(error) = Command::new("open").arg("-R").arg(path).status() {
             self.stats.set_error(format!(
                 "failed to show {} in Finder: {error}",
                 path.display()
