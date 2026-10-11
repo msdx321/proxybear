@@ -13,7 +13,7 @@ use crate::{
 };
 
 const SSH_CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
-const SSH_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
+const SSH_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
 
 pub struct Client {
     connector: Connector,
