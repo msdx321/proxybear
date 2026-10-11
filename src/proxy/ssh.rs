@@ -1,6 +1,6 @@
-use std::{fmt, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use russh::{
     client,
     keys::{HashAlg, PrivateKeyWithHashAlg, PublicKeyOrCertificate, load_secret_key},
@@ -26,23 +26,6 @@ pub struct Client {
 pub struct Connector {
     ssh: SshConnectConfig,
     stats: Arc<ProxyStats>,
-}
-
-/// A connect failure that retrying with the same settings is unlikely to fix,
-/// such as rejected credentials or a changed host key.
-#[derive(Debug)]
-pub struct FatalError(String);
-
-impl fmt::Display for FatalError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl std::error::Error for FatalError {}
-
-pub fn is_fatal(error: &anyhow::Error) -> bool {
-    error.is::<FatalError>()
 }
 
 impl Connector {
@@ -95,11 +78,10 @@ impl Connector {
                     error.downcast_ref::<russh::Error>(),
                     Some(russh::Error::UnknownKey)
                 ) {
-                    FatalError(format!(
+                    anyhow!(
                         "SSH host key for {} is not trusted; verify it in Settings",
                         ssh.server
-                    ))
-                    .into()
+                    )
                 } else {
                     error.context(format!("failed to connect SSH server {}", ssh.server))
                 }
@@ -143,7 +125,7 @@ async fn authenticate_password(
         .await
         .context("SSH password authentication failed")?;
     if !auth_result.success() {
-        return Err(FatalError("SSH password authentication was rejected".into()).into());
+        bail!("SSH password authentication was rejected");
     }
     Ok(())
 }
@@ -161,8 +143,7 @@ async fn authenticate_public_key(
         "Authenticating with public key"
     );
     let passphrase = (!key_password.is_empty()).then_some(key_password);
-    let key_pair = load_secret_key(key_path, passphrase)
-        .map_err(|error| FatalError(format!("failed to load SSH key: {error}")))?;
+    let key_pair = load_secret_key(key_path, passphrase).context("failed to load SSH key")?;
     let auth_result = session
         .authenticate_publickey(
             username,
@@ -174,7 +155,7 @@ async fn authenticate_public_key(
         .await
         .context("SSH public key authentication failed")?;
     if !auth_result.success() {
-        return Err(FatalError("SSH public key authentication was rejected".into()).into());
+        bail!("SSH public key authentication was rejected");
     }
     Ok(())
 }

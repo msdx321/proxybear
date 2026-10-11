@@ -24,8 +24,8 @@ const CHANNEL_OPEN_RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
 const CHANNEL_OPEN_ATTEMPTS: usize = 2;
 const SSH_DISCONNECT_TIMEOUT: Duration = Duration::from_secs(1);
 const SSH_PING_TIMEOUT: Duration = Duration::from_secs(3);
-const RECONNECT_BACKOFF_MIN: Duration = Duration::from_secs(1);
-const RECONNECT_BACKOFF_MAX: Duration = Duration::from_secs(30);
+/// Reconnect attempts of one slot are at least this far apart.
+const RECONNECT_MIN_INTERVAL: Duration = Duration::from_secs(1);
 /// Sessions that lived at least this long reconnect immediately when closed.
 const STABLE_SESSION_UPTIME: Duration = Duration::from_secs(30);
 
@@ -98,7 +98,7 @@ pub struct Pool {
     slots: watch::Sender<Vec<Option<Arc<Session>>>>,
     stats: Arc<ProxyStats>,
     listening_status: String,
-    /// Cuts reconnect backoff short when a client is waiting for a session.
+    /// Wakes supervisors to reconnect when a client needs a session.
     wake: Notify,
 }
 
@@ -112,13 +112,11 @@ impl Pool {
         }
     }
 
-    /// Keep slot `index` connected until the proxy stops.
+    /// Keep slot `index` connected while clients need it, until the proxy stops.
     pub async fn supervise(self: Arc<Self>, index: usize, connector: ssh::Connector) {
-        let mut backoff = RECONNECT_BACKOFF_MIN;
         loop {
-            let retry_in = match connector.connect().await {
+            match connector.connect().await {
                 Ok((handle, closed)) => {
-                    backoff = RECONNECT_BACKOFF_MIN;
                     let started = Instant::now();
                     let session = Arc::new(Session {
                         handle,
@@ -151,36 +149,21 @@ impl Pool {
                     if started.elapsed() >= STABLE_SESSION_UPTIME {
                         continue;
                     }
-                    Some(backoff)
                 }
-                // Rejected credentials or a changed host key are not retried
-                // on a timer, which could hammer the server, but they can be
-                // transient on a flaky network. Retry when a client needs a
-                // session instead of stopping the proxy.
-                Err(error) if ssh::is_fatal(&error) => {
-                    tracing::warn!(
-                        event = "ssh_connect_failed",
-                        slot = index,
-                        error = %error,
-                        "SSH connect failed; retrying on the next connection request"
-                    );
-                    self.report_connect_error(&error);
-                    None
-                }
+                // Retrying on a timer would keep waking the network while the
+                // server is unreachable or rejects us, so wait for a client
+                // that needs a session instead.
                 Err(error) => {
                     tracing::warn!(
                         event = "ssh_connect_failed",
                         slot = index,
-                        retry_in = ?backoff,
                         error = format!("{error:#}"),
-                        "SSH connect failed"
+                        "SSH connect failed; retrying on the next connection request"
                     );
                     self.report_connect_error(&error);
-                    Some(backoff)
                 }
-            };
-            self.wait_backoff(retry_in).await;
-            backoff = (backoff * 2).min(RECONNECT_BACKOFF_MAX);
+            }
+            self.wait_for_client().await;
         }
     }
 
@@ -244,11 +227,11 @@ impl Pool {
 
     async fn acquire(&self) -> Result<Lease> {
         let mut slots = self.slots.subscribe();
-        if !slots
+        // Supervisors of empty slots reconnect only when a client asks.
+        if slots
             .borrow()
             .iter()
-            .flatten()
-            .any(|session| session.is_live())
+            .any(|slot| slot.as_ref().is_none_or(|session| !session.is_live()))
         {
             self.wake.notify_waiters();
         }
@@ -341,23 +324,21 @@ impl Pool {
         }
     }
 
-    /// Sleep for `backoff`, or until a client asks for a session, keeping
-    /// attempts at least `RECONNECT_BACKOFF_MIN` apart. Without a `backoff`,
-    /// wait for a client only.
-    async fn wait_backoff(&self, backoff: Option<Duration>) {
+    /// Wait until a client needs a session, keeping attempts at least
+    /// `RECONNECT_MIN_INTERVAL` apart. A client that is already waiting
+    /// counts, so one that asked during the last attempt is not left waiting.
+    async fn wait_for_client(&self) {
         let started = Instant::now();
-        let timer = async {
-            match backoff {
-                Some(backoff) => sleep(backoff).await,
-                None => std::future::pending().await,
-            }
-        };
-        tokio::select! {
-            () = timer => {}
-            () = self.wake.notified() => {
-                sleep(RECONNECT_BACKOFF_MIN.saturating_sub(started.elapsed())).await;
-            }
+        let wake = self.wake.notified();
+        tokio::pin!(wake);
+        // Register before checking, so a client arriving in between still
+        // wakes this supervisor.
+        wake.as_mut().enable();
+        // Every client in `acquire` holds a receiver of `slots`.
+        if self.slots.receiver_count() == 0 {
+            wake.await;
         }
+        sleep(RECONNECT_MIN_INTERVAL.saturating_sub(started.elapsed())).await;
     }
 
     fn set_slot(&self, index: usize, session: Option<Arc<Session>>) {
