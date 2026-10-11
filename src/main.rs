@@ -15,7 +15,7 @@ use gpui::{
     size,
 };
 use gpui_component::Root;
-use native_dialog::DialogBuilder;
+use native_dialog::{DialogBuilder, MessageLevel};
 
 use app::{
     logging, platform, presentation,
@@ -588,6 +588,14 @@ fn main() {
                 }
                 Err(error) => {
                     eprintln!("ProxyBear failed to start: {error:#}");
+                    // Launched from Finder or at login, stderr goes nowhere.
+                    cx.activate(true);
+                    let _ = DialogBuilder::message()
+                        .set_level(MessageLevel::Error)
+                        .set_title("ProxyBear failed to start")
+                        .set_text(format!("{error:#}"))
+                        .alert()
+                        .show();
                     cx.quit();
                 }
             }

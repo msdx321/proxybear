@@ -214,7 +214,8 @@ pub fn app_paths() -> Result<AppPaths> {
 
 pub fn load_config(paths: &AppPaths) -> Result<AppConfig> {
     let mut config = match fs::read_to_string(&paths.config_path) {
-        Ok(text) => toml::from_str(&text).context("invalid config TOML")?,
+        Ok(text) => toml::from_str(&text)
+            .with_context(|| format!("invalid config TOML in {}", paths.config_path.display()))?,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => AppConfig::default(),
         Err(error) => return Err(error).context("failed to read config"),
     };
