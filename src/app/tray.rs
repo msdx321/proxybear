@@ -125,9 +125,12 @@ impl TrayMenu {
         let ns_menu = menu.ns_menu().cast::<AnyObject>();
 
         let icon_state = TrayIconState::Unhappy;
-        let tray = TrayIconBuilder::new()
-            .with_icon(icons::tray_icon(icon_state)?)
-            .with_icon_as_template(true)
+        let builder = TrayIconBuilder::new();
+        #[cfg(target_os = "macos")]
+        let builder = builder.with_icon_templated(icons::tray_icon(icon_state)?);
+        #[cfg(not(target_os = "macos"))]
+        let builder = builder.with_icon(icons::tray_icon(icon_state)?);
+        let tray = builder
             .with_tooltip("ProxyBear")
             .with_menu(Box::new(menu))
             .build()
@@ -174,8 +177,11 @@ impl TrayMenu {
         if self.icon_state.get() == state {
             return Ok(());
         }
+        #[cfg(target_os = "macos")]
         self._tray
-            .set_icon_with_as_template(Some(icons::tray_icon(state)?), true)?;
+            .set_icon_templated(Some(icons::tray_icon(state)?))?;
+        #[cfg(not(target_os = "macos"))]
+        self._tray.set_icon(Some(icons::tray_icon(state)?))?;
         self.icon_state.set(state);
         Ok(())
     }
