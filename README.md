@@ -37,11 +37,48 @@ Run `brew update` followed by `brew upgrade --cask msdx321/tap/proxybear` to upd
 
 ### From source
 
+Install stable Rust and the Xcode Command Line Tools (`xcode-select --install`),
+then run these commands from the repository root:
+
 ```sh
-cargo install cargo-bundle
-cargo bundle --release
+brew install cargo-binstall
+cargo binstall cargo-bundle --version '=0.11.0' --disable-strategies compile --no-confirm
+cargo bundle --release --all-features --format osx
 open target/release/bundle/osx/ProxyBear.app
 ```
+
+`cargo-bundle` is downloaded as a prebuilt binary. Installation fails if no binary
+is available, rather than compiling the packaging tool from source.
+
+Source builds do not embed Sparkle; automatic updates are available in the
+published release bundles.
+
+## Development
+
+Use a debug build for local work:
+
+```sh
+cargo build --locked
+cargo run --locked
+```
+
+Debug builds use line tables for file-and-line backtraces with less debug-symbol
+generation. To inspect variables in a debugger, build with full debug information:
+
+```sh
+CARGO_PROFILE_DEV_DEBUG=2 cargo build --locked
+```
+
+Run the same checks as CI before submitting a change:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo build --locked --all-features
+```
+
+CI compiles the executable on every pull request. Default-branch builds also
+compile the release profile so tagged releases can reuse its dependency cache.
 
 ## Usage
 

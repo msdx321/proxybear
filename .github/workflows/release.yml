@@ -39,13 +39,6 @@ jobs:
         with:
           components: clippy,rustfmt
 
-      - name: Restore Rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: macos-rust-release
-          cache-bin: false
-          cache-on-failure: true
-
       - name: Validate release tag
         run: |
           case "$RELEASE_TAG" in
@@ -66,20 +59,23 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: macos-rust-release
+          cache-bin: false
+          cache-on-failure: true
+
       - name: Run clippy
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
-      - name: Restore cargo-bundle cache
-        uses: actions/cache@v4
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@v1.25.3
         with:
-          path: ~/.cargo/bin/cargo-bundle
-          key: cargo-bundle-${{ runner.os }}-${{ runner.arch }}-0.11.0
+          version: v1.25.3
 
-      - name: Install cargo-bundle
-        run: |
-          if ! command -v cargo-bundle >/dev/null 2>&1; then
-            cargo install cargo-bundle --version 0.11.0 --locked
-          fi
+      - name: Install cargo-bundle binary
+        run: cargo binstall cargo-bundle --version '=0.11.0' --disable-strategies compile --no-confirm
 
       - name: Install uv for DMG packaging
         uses: astral-sh/setup-uv@v10.0.1
