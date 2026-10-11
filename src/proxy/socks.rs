@@ -7,7 +7,7 @@ use tokio::{
 };
 
 pub const REPLY_SUCCEEDED: u8 = 0x00;
-pub const REPLY_GENERAL_FAILURE: u8 = 0x05;
+pub const REPLY_GENERAL_FAILURE: u8 = 0x01;
 
 pub struct Request {
     pub(crate) host: String,
