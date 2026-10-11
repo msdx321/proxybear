@@ -175,7 +175,7 @@ impl ProxyBear {
                         .reload(level.filter())
                         .context("update log level")
                 }) {
-                    self.feedback = Some(format!("Could not change log level: {error}"));
+                    self.feedback = Some(format!("Could not change log level: {error:#}"));
                 }
             }
             SettingsField::Server(v) => self.form.server = v,
@@ -202,7 +202,7 @@ impl ProxyBear {
                             self.start_proxy(cx);
                         }
                     }
-                    Err(error) => self.stats.set_error(error.to_string()),
+                    Err(error) => self.stats.set_error(format!("{error:#}")),
                 }
                 self.refresh_stats(cx);
             }
@@ -312,7 +312,7 @@ impl ProxyBear {
                     }
                     Err(error) => this
                         .stats
-                        .set_error(format!("failed to open settings: {error}")),
+                        .set_error(format!("failed to open settings: {error:#}")),
                 }
                 cx.notify();
             });
@@ -399,7 +399,7 @@ impl ProxyBear {
                         let start_pending = this.proxy.finish();
                         this.stats.set_status("Stopped");
                         if let Err(error) = result {
-                            this.stats.set_error(error.to_string());
+                            this.stats.set_error(format!("{error:#}"));
                         }
                         if start_pending {
                             this.start_proxy(cx);
@@ -410,7 +410,7 @@ impl ProxyBear {
                 .detach();
             }
             Ok(None) => {}
-            Err(error) => self.stats.set_error(error.to_string()),
+            Err(error) => self.stats.set_error(format!("{error:#}")),
         }
         self.refresh_stats(cx);
     }
@@ -441,7 +441,7 @@ impl ProxyBear {
         if let Err(error) = config::set_autostart(&self.paths, enabled)
             .and_then(|()| self.save_config_state(config))
         {
-            self.stats.set_error(error.to_string());
+            self.stats.set_error(format!("{error:#}"));
         }
     }
 
@@ -449,7 +449,7 @@ impl ProxyBear {
         let mut config = self.config().clone();
         config.auto_connect = enabled;
         if let Err(error) = self.save_config_state(config) {
-            self.stats.set_error(error.to_string());
+            self.stats.set_error(format!("{error:#}"));
         }
     }
 
@@ -464,7 +464,7 @@ impl ProxyBear {
                 "Host key forgotten. You will verify the server's key on the next connection."
                     .into()
             }
-            Err(error) => format!("Could not forget host key: {error}"),
+            Err(error) => format!("Could not forget host key: {error:#}"),
         });
     }
 
@@ -491,7 +491,7 @@ impl ProxyBear {
                 Ok(()) => true,
                 Err(error) => {
                     // Keep the window open on the page that shows the error.
-                    self.stats.set_error(error.to_string());
+                    self.stats.set_error(format!("{error:#}"));
                     self.active_tab = SettingsTab::Connection;
                     false
                 }
@@ -525,7 +525,7 @@ impl ProxyBear {
         config.host_fingerprint = Some(prompt.fingerprint);
         if let Err(error) = self.save_config_state(config) {
             self.stats
-                .set_error(format!("Could not save host key: {error}"));
+                .set_error(format!("Could not save host key: {error:#}"));
             return;
         }
         // Each run keeps the key it started with, so restart to use this one.
