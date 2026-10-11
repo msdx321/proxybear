@@ -42,7 +42,6 @@ pub fn init(config_dir: &Path, level: LogLevel) -> Result<LogFilter> {
 struct RotatingWriter {
     file: fs::File,
     path: PathBuf,
-    written: u64,
     max_size: u64,
 }
 
@@ -76,11 +75,9 @@ impl RotatingWriter {
             .create(true)
             .append(true)
             .open(&path)?;
-        let written = file.metadata()?.len();
         Ok(Self {
             file,
             path,
-            written,
             max_size,
         })
     }
@@ -88,7 +85,9 @@ impl RotatingWriter {
 
 impl Write for RotatingWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        if self.written + buf.len() as u64 > self.max_size {
+        // Read the size from the file rather than counting writes, so it
+        // stays right after "Clear Log" truncates the file.
+        if self.file.metadata()?.len() + buf.len() as u64 > self.max_size {
             let old_path = self.path.with_extension("old.log");
             let _ = fs::remove_file(&old_path);
             if fs::rename(&self.path, &old_path).is_err() {
@@ -104,11 +103,8 @@ impl Write for RotatingWriter {
                     .append(true)
                     .open(&self.path)?;
             }
-            self.written = 0;
         }
-        let n = self.file.write(buf)?;
-        self.written += n as u64;
-        Ok(n)
+        self.file.write(buf)
     }
 
     fn flush(&mut self) -> io::Result<()> {
