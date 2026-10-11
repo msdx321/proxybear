@@ -219,7 +219,7 @@ pub fn load_config(paths: &AppPaths) -> Result<AppConfig> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => AppConfig::default(),
         Err(error) => return Err(error).context("failed to read config"),
     };
-    config.autostart = is_autostart_enabled(paths);
+    config.autostart = is_autostart_enabled();
     Ok(config)
 }
 
@@ -264,11 +264,11 @@ pub fn save_secrets(old: &AppConfig, new: &AppConfig) -> Result<()> {
     Ok(())
 }
 
-pub fn is_autostart_enabled(_paths: &AppPaths) -> bool {
+pub fn is_autostart_enabled() -> bool {
     autostart().is_ok_and(|autostart| autostart.is_enabled().unwrap_or(false))
 }
 
-pub fn set_autostart(_paths: &AppPaths, enabled: bool) -> Result<()> {
+pub fn set_autostart(enabled: bool) -> Result<()> {
     let autostart = autostart()?;
     if enabled {
         autostart.enable().context("failed to enable autostart")?;

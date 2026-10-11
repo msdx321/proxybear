@@ -10,7 +10,7 @@ use tray_icon::{
     menu::{CheckMenuItem, ContextMenu, Menu, MenuEvent, MenuItem, PredefinedMenuItem},
 };
 
-use crate::config::{AppPaths, is_autostart_enabled};
+use crate::config::is_autostart_enabled;
 
 use super::icons::{self, TrayIconState};
 
@@ -80,7 +80,7 @@ pub struct TrayMenu {
 }
 
 impl TrayMenu {
-    pub fn new(paths: &AppPaths, auto_connect: bool, updates: bool) -> Result<Self> {
+    pub fn new(auto_connect: bool, updates: bool) -> Result<Self> {
         let menu = Menu::new();
         let status = MenuItem::with_id("status", "Status: Stopped", false, None);
         let stats = MenuItem::with_id("stats", "up 0 B, down 0 B", false, None);
@@ -91,7 +91,7 @@ impl TrayMenu {
             "autostart",
             "Launch at Login",
             true,
-            is_autostart_enabled(paths),
+            is_autostart_enabled(),
             None,
         );
         let auto_connect =

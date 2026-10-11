@@ -72,8 +72,7 @@ impl ProxyBear {
         }
         let proxy = ProxyController::new().context("create proxy controller")?;
         let updater = Updater::start();
-        let tray =
-            TrayMenu::new(&paths, config.auto_connect, updater.is_some()).context("tray menu")?;
+        let tray = TrayMenu::new(config.auto_connect, updater.is_some()).context("tray menu")?;
         let config_path = paths.config_path.display().to_string();
         let form = SettingsForm::from_config(&config);
         let log_tail = LogTail::new(paths.log_path());
@@ -438,8 +437,8 @@ impl ProxyBear {
     fn set_autostart(&mut self, enabled: bool) {
         let mut config = self.config().clone();
         config.autostart = enabled;
-        if let Err(error) = config::set_autostart(&self.paths, enabled)
-            .and_then(|()| self.save_config_state(config))
+        if let Err(error) =
+            config::set_autostart(enabled).and_then(|()| self.save_config_state(config))
         {
             self.stats.set_error(format!("{error:#}"));
         }
