@@ -75,7 +75,9 @@ jobs:
           version: v1.25.3
 
       - name: Install cargo-bundle binary
-        run: cargo binstall cargo-bundle --version '=0.11.0' --disable-strategies compile --no-confirm
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: cargo binstall cargo-bundle --version '=0.11.0' --strategies quick-install --no-confirm
 
       - name: Install uv for DMG packaging
         uses: astral-sh/setup-uv@v10.0.1
