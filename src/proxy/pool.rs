@@ -1,3 +1,5 @@
+//! Maintains the SSH session pool and leases channels to proxy clients.
+
 use std::{
     net::SocketAddr,
     sync::{
@@ -113,7 +115,7 @@ impl Pool {
     }
 
     /// Keep slot `index` connected while clients need it, until the proxy stops.
-    pub async fn supervise(self: Arc<Self>, index: usize, connector: ssh::Connector) {
+    pub async fn supervise(self: Arc<Self>, index: usize, connector: ssh::Connector) -> ! {
         loop {
             match connector.connect().await {
                 Ok((handle, closed)) => {

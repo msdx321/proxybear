@@ -1,3 +1,5 @@
+//! Reads new log lines for the settings window and keeps a bounded history.
+
 use std::{
     collections::VecDeque,
     fs,
@@ -123,9 +125,7 @@ impl LogTail {
     }
 
     fn push_line(&mut self, line: &str) {
-        while self.lines.len() >= MAX_LOG_LINES {
-            self.lines.pop_front();
-        }
+        self.lines.retain_back(MAX_LOG_LINES - 1);
         self.lines.push_back(line.to_owned().into());
     }
 }

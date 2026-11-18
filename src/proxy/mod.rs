@@ -1,3 +1,5 @@
+//! Serves local SOCKS connections over the SSH session pool.
+
 mod pool;
 mod socks;
 mod ssh;
@@ -56,7 +58,7 @@ pub async fn run_proxy(
         format!("Listening on {local_addr}"),
     ));
     let connector = ssh::Connector::new(runtime.ssh, Arc::clone(&stats));
-    let mut supervisors = JoinSet::new();
+    let mut supervisors = JoinSet::<!>::new();
     for index in 0..runtime.pool_size {
         supervisors.spawn(Arc::clone(&pool).supervise(index, connector.clone()));
     }
@@ -65,9 +67,8 @@ pub async fn run_proxy(
     let result = loop {
         tokio::select! {
             _ = &mut shutdown => break Ok(()),
-            Some(result) = supervisors.join_next() => {
-                // Supervisors run until aborted, so this only catches a panic.
-                break result.context("SSH session supervisor failed");
+            Some(Err(error)) = supervisors.join_next() => {
+                break Err(error).context("SSH session supervisor failed");
             }
             accepted = listener.accept() => match accepted {
                 // Per-connection failures are logged where they happen; they
