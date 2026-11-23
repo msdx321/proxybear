@@ -1,9 +1,12 @@
+//! Forwards a local TCP connection over an SSH channel.
+
 use std::{error::Error, fmt, io};
 
 use russh::{ChannelMsg, client};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
+    sync::Notify,
 };
 
 use crate::app::stats::ProxyStats;
@@ -40,7 +43,7 @@ impl Error for TunnelError {
     }
 }
 
-/// Copy data both ways until the remote side finishes.
+/// Copy data until both sides send EOF or the SSH channel closes.
 ///
 /// The two directions run concurrently so a full SSH window in one direction
 /// cannot stall the other.
@@ -68,6 +71,7 @@ pub async fn pump(
             }
         }
     };
+    let remote_eof = Notify::new();
     let download = async {
         while let Some(msg) = from_remote.wait().await {
             match msg {
@@ -78,20 +82,23 @@ pub async fn pump(
                         .await
                         .map_err(TunnelError::LocalIo)?;
                 }
-                ChannelMsg::Eof => break,
+                ChannelMsg::Eof => {
+                    local_write.shutdown().await.map_err(TunnelError::LocalIo)?;
+                    remote_eof.notify_one();
+                }
+                ChannelMsg::Close => break,
                 _ => {}
             }
         }
         Ok(())
     };
-    tokio::pin!(upload, download);
-
     let result = tokio::select! {
-        result = &mut download => result,
-        result = &mut upload => match result {
-            Ok(()) => download.await,
-            Err(error) => Err(error),
-        },
+        result = download => result,
+        result = async {
+            upload.await?;
+            remote_eof.notified().await;
+            Ok(())
+        } => result,
     };
     // russh does not close channels on drop; release it on the server too.
     let _ = to_remote.close().await;
