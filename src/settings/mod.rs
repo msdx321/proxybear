@@ -1,3 +1,5 @@
+//! Defines settings window actions and validates edits to connection settings.
+
 mod log_tail;
 mod theme;
 mod view;
@@ -6,7 +8,10 @@ use std::net::{IpAddr, SocketAddr};
 
 use anyhow::{Context, Result};
 
-use crate::config::{AppConfig, AuthMethod, LogLevel, MAX_POOL_SIZE};
+use crate::{
+    app::stats::HostKeyPrompt,
+    config::{AppConfig, AuthMethod, LogLevel, MAX_POOL_SIZE},
+};
 
 pub use log_tail::LogTail;
 pub use theme::init as init_theme;
@@ -41,7 +46,7 @@ pub enum SettingsField {
     Start,
     Stop,
     ForgetHostKey,
-    TrustHostKey,
+    TrustHostKey(HostKeyPrompt),
     RejectHostKey,
     ChooseKey,
     OpenLog,

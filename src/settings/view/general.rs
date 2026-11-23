@@ -1,3 +1,5 @@
+//! Renders proxy status, host key confirmation, and startup settings.
+
 use gpui::{prelude::*, *};
 use gpui_component::{
     ActiveTheme, Icon, IconName, Sizable, button::ButtonVariants, h_flex, v_flex,
@@ -254,12 +256,12 @@ impl SettingsView {
                     ),
             )
             .child(div().text_sm().child(body))
-            .when_some(prompt.previous, |card, previous| {
+            .when_some(prompt.previous.clone(), |card, previous| {
                 card.child(fingerprint("Trusted key", previous, cx))
             })
             .child(fingerprint(
                 if changed { "New key" } else { "Fingerprint" },
-                prompt.fingerprint,
+                prompt.fingerprint.clone(),
                 cx,
             ))
             .child(
@@ -275,9 +277,13 @@ impl SettingsView {
                         .ghost(),
                     )
                     .child(
-                        self.button("trust-host-key", trust_label, SettingsField::TrustHostKey)
-                            .when(changed, |button| button.danger())
-                            .when(!changed, |button| button.primary()),
+                        self.button(
+                            "trust-host-key",
+                            trust_label,
+                            SettingsField::TrustHostKey(prompt),
+                        )
+                        .when(changed, |button| button.danger())
+                        .when(!changed, |button| button.primary()),
                     ),
             )
     }

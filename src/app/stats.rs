@@ -1,3 +1,5 @@
+//! Shares proxy status, traffic counters, and host key prompts with the UI.
+
 use std::sync::{
     Mutex, MutexGuard,
     atomic::{AtomicBool, AtomicU64, Ordering},
@@ -69,6 +71,14 @@ impl ProxyStats {
         let mut current = lock(&self.host_key_prompt);
         if *current != prompt {
             *current = prompt;
+            notify_changed();
+        }
+    }
+
+    pub fn clear_host_key_prompt(&self, displayed: &HostKeyPrompt) {
+        let mut current = lock(&self.host_key_prompt);
+        if current.as_ref() == Some(displayed) {
+            *current = None;
             notify_changed();
         }
     }

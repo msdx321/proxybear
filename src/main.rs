@@ -1,3 +1,5 @@
+//! Runs the menu bar app and coordinates the proxy, tray, and settings window.
+
 mod app;
 mod config;
 mod proxy;
@@ -21,7 +23,7 @@ use app::{
     logging, platform, presentation,
     presentation::MenuPresenter,
     proxy_control::ProxyController,
-    stats::{self, ProxyStats, StatsSnapshot},
+    stats::{self, HostKeyPrompt, ProxyStats, StatsSnapshot},
     tray::{self, MenuAction, TrayMenu},
     updater::Updater,
 };
@@ -209,7 +211,7 @@ impl ProxyBear {
             SettingsField::Start => self.start_proxy(cx),
             SettingsField::Stop => self.stop_proxy(cx),
             SettingsField::ForgetHostKey => self.forget_host_key(),
-            SettingsField::TrustHostKey => self.trust_host_key(cx),
+            SettingsField::TrustHostKey(prompt) => self.trust_host_key(prompt, cx),
             SettingsField::RejectHostKey => {
                 self.stats.set_host_key_prompt(None);
                 self.stop_proxy(cx);
@@ -511,22 +513,26 @@ impl ProxyBear {
         self.refresh_stats(cx);
     }
 
-    fn trust_host_key(&mut self, cx: &mut gpui::Context<Self>) {
-        let Some(prompt) = self.stats.snapshot().host_key_prompt else {
+    fn trust_host_key(&mut self, prompt: HostKeyPrompt, cx: &mut gpui::Context<Self>) {
+        if self.stats.snapshot().host_key_prompt.as_ref() != Some(&prompt) {
+            self.refresh_stats(cx);
             return;
-        };
-        self.stats.set_host_key_prompt(None);
+        }
         let mut config = self.config().clone();
-        if prompt.server != format!("{}:{}", config.server, config.port) {
+        if prompt.server != format!("{}:{}", config.server, config.port)
+            || prompt.previous != config.host_fingerprint
+        {
+            self.stats.clear_host_key_prompt(&prompt);
             self.feedback = Some("The server settings changed. Connect again to verify.".into());
             return;
         }
-        config.host_fingerprint = Some(prompt.fingerprint);
+        config.host_fingerprint = Some(prompt.fingerprint.clone());
         if let Err(error) = self.save_config_state(config) {
             self.stats
                 .set_error(format!("Could not save host key: {error:#}"));
             return;
         }
+        self.stats.clear_host_key_prompt(&prompt);
         // Each run keeps the key it started with, so restart to use this one.
         if self.proxy.is_running() {
             self.stop_proxy(cx);
