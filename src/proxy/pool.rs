@@ -3,14 +3,17 @@
 use std::{
     net::SocketAddr,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, anyhow};
-use futures::future::join_all;
+use futures::{
+    FutureExt,
+    future::{BoxFuture, Shared, WeakShared, join_all},
+};
 use russh::{Disconnect, client};
 use tokio::{
     sync::{Notify, watch},
@@ -37,11 +40,36 @@ pub struct Session {
     active_channels: AtomicUsize,
     dead: AtomicBool,
     kill: Notify,
+    ping: Mutex<Option<WeakShared<BoxFuture<'static, ()>>>>,
 }
 
 impl Session {
     fn is_live(&self) -> bool {
         !self.dead.load(Ordering::Relaxed) && !self.handle.is_closed()
+    }
+
+    fn check_liveness(self: &Arc<Self>) -> Shared<BoxFuture<'static, ()>> {
+        let mut current = self.ping.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(ping) = current.as_ref().and_then(WeakShared::upgrade)
+            && ping.peek().is_none()
+        {
+            return ping;
+        }
+        let session = Arc::clone(self);
+        let ping = async move {
+            if !matches!(
+                timeout(SSH_PING_TIMEOUT, session.handle.send_ping()).await,
+                Ok(Ok(()))
+            ) {
+                session.kill();
+            }
+        }
+        .boxed()
+        .shared();
+        // The waiting requests own the ping, so one finishing early leaves
+        // the same probe and deadline in place for the others.
+        *current = ping.downgrade();
+        ping
     }
 
     /// Stop handing out this session and ask its supervisor to replace it.
@@ -125,6 +153,7 @@ impl Pool {
                         active_channels: AtomicUsize::new(0),
                         dead: AtomicBool::new(false),
                         kill: Notify::new(),
+                        ping: Mutex::new(None),
                     });
                     self.set_slot(index, Some(Arc::clone(&session)));
                     tracing::info!(
@@ -298,7 +327,7 @@ impl Pool {
     ///
     /// Sessions usually die together (sleep, network change), so checking
     /// them all avoids paying the stall timeout once per session.
-    async fn check_sessions(&self) {
+    pub(super) async fn check_sessions(&self) {
         let sessions: Vec<_> = self
             .slots
             .borrow()
@@ -307,15 +336,7 @@ impl Pool {
             .filter(|session| session.is_live())
             .cloned()
             .collect();
-        join_all(sessions.iter().map(|session| async move {
-            if !matches!(
-                timeout(SSH_PING_TIMEOUT, session.handle.send_ping()).await,
-                Ok(Ok(()))
-            ) {
-                session.kill();
-            }
-        }))
-        .await;
+        join_all(sessions.iter().map(Session::check_liveness)).await;
     }
 
     /// Show a connect error unless another session still serves clients.

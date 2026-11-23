@@ -8,9 +8,10 @@ mod tunnel;
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
+use futures::{StreamExt, stream::FuturesUnordered};
 use tokio::{
     net::{TcpListener, TcpStream},
-    sync::oneshot,
+    sync::mpsc,
     task::JoinSet,
     time::sleep,
 };
@@ -26,7 +27,7 @@ const ACCEPT_RETRY_DELAY: Duration = Duration::from_millis(100);
 pub async fn run_proxy(
     runtime: RuntimeConfig,
     stats: Arc<ProxyStats>,
-    mut shutdown: oneshot::Receiver<()>,
+    mut check_requests: mpsc::Receiver<()>,
 ) -> Result<()> {
     let local_addr = runtime.listen.local_addr;
 
@@ -64,9 +65,18 @@ pub async fn run_proxy(
     }
 
     let mut clients = JoinSet::new();
+    let mut health_checks = FuturesUnordered::new();
     let result = loop {
         tokio::select! {
-            _ = &mut shutdown => break Ok(()),
+            request = check_requests.recv() => {
+                if request.is_none() {
+                    break Ok(());
+                }
+                if health_checks.is_empty() {
+                    health_checks.push(pool.check_sessions());
+                }
+            }
+            Some(()) = health_checks.next() => {}
             Some(Err(error)) = supervisors.join_next() => {
                 break Err(error).context("SSH session supervisor failed");
             }

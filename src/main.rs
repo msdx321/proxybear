@@ -131,7 +131,10 @@ impl ProxyBear {
 
     fn handle_menu(&mut self, action: MenuAction, cx: &mut gpui::Context<Self>) {
         match action {
-            MenuAction::MenuOpened => self.menu_open = true,
+            MenuAction::MenuOpened => {
+                self.menu_open = true;
+                self.proxy.check_ssh_status();
+            }
             MenuAction::MenuClosed => self.menu_open = false,
             MenuAction::StartStop => {
                 if self.proxy.is_running() {

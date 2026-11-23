@@ -1,9 +1,11 @@
+//! Controls the background proxy from the UI.
+
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use tokio::{
     runtime::{Builder, Runtime},
-    sync::oneshot,
+    sync::mpsc,
 };
 
 use crate::{config::AppConfig, proxy};
@@ -12,8 +14,8 @@ use super::stats::ProxyStats;
 
 pub struct ProxyController {
     runtime: Runtime,
-    /// Present while the proxy runs and has not been asked to stop.
-    shutdown: Option<oneshot::Sender<()>>,
+    /// Dropping the sender stops this run, even during a health check.
+    health_checks: Option<mpsc::Sender<()>>,
     /// The proxy task has not finished yet; it may still be stopping.
     task_alive: bool,
     /// Start again once the stopping task finishes.
@@ -31,7 +33,7 @@ impl ProxyController {
 
         Ok(Self {
             runtime,
-            shutdown: None,
+            health_checks: None,
             task_alive: false,
             start_pending: false,
         })
@@ -39,13 +41,19 @@ impl ProxyController {
 
     /// Whether the proxy runs and has not been asked to stop.
     pub fn is_running(&self) -> bool {
-        self.shutdown.is_some()
+        self.health_checks.is_some()
+    }
+
+    pub fn check_ssh_status(&self) {
+        if let Some(requests) = &self.health_checks {
+            let _ = requests.try_send(());
+        }
     }
 
     /// Record that the proxy task ended. Returns whether a start was
     /// requested while it was stopping.
     pub fn finish(&mut self) -> bool {
-        self.shutdown = None;
+        self.health_checks = None;
         self.task_alive = false;
         std::mem::take(&mut self.start_pending)
     }
@@ -66,24 +74,25 @@ impl ProxyController {
             self.start_pending = true;
             return Ok(None);
         }
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let (requests, receiver) = mpsc::channel(1);
         stats.set_status("Starting");
         stats.clear_error();
         let task = self
             .runtime
-            .spawn(proxy::run_proxy(runtime, stats, shutdown_rx));
-        self.shutdown = Some(shutdown_tx);
+            .spawn(proxy::run_proxy(runtime, stats, receiver));
+        self.health_checks = Some(requests);
         self.task_alive = true;
         Ok(Some(task))
     }
 
     pub fn stop(&mut self, stats: &ProxyStats) {
         self.start_pending = false;
-        if let Some(shutdown) = self.shutdown.take() {
-            stats.set_status("Stopping...");
-            if shutdown.send(()).is_err() {
-                stats.set_status("Stopped");
-            }
+        if let Some(requests) = self.health_checks.take() {
+            stats.set_status(if requests.is_closed() {
+                "Stopped"
+            } else {
+                "Stopping..."
+            });
         } else if !self.task_alive {
             stats.set_status("Stopped");
         }
