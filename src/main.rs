@@ -422,16 +422,13 @@ impl ProxyBear {
     }
 
     fn save_settings(&self) -> Result<()> {
-        let old = self.config().clone();
-        let mut config = old.clone();
+        let mut config = self.config().clone();
         self.form.apply_to_config(&mut config)?;
-        config::save_secrets(&old, &config)?;
         self.save_config_state(config)
     }
 
     fn save_config_state(&self, config: AppConfig) -> Result<()> {
-        save_config(&self.paths, &config).context("failed to save config")?;
-        *self.config() = config;
+        save_config(&self.paths, &mut self.config(), config).context("failed to save config")?;
         self.stats.clear_error();
         Ok(())
     }

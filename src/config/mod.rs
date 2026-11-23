@@ -1,3 +1,5 @@
+//! Loads and saves application settings and prepares them for the proxy.
+
 mod keychain;
 
 use std::{env, fs, io::Write, net::SocketAddr, path::PathBuf};
@@ -114,6 +116,10 @@ pub struct AppConfig {
     /// Kept in the Keychain, like `key_password`.
     #[serde(default, skip_serializing)]
     pub ssh_password: String,
+    #[serde(skip)]
+    legacy_ssh_password: bool,
+    #[serde(skip)]
+    legacy_key_password: bool,
     pub local_addr: SocketAddr,
     #[serde(default)]
     pub autostart: bool,
@@ -135,6 +141,8 @@ impl Default for AppConfig {
             key_path: String::new(),
             key_password: String::new(),
             ssh_password: String::new(),
+            legacy_ssh_password: false,
+            legacy_key_password: false,
             local_addr: SocketAddr::from(([127, 0, 0, 1], 1080)),
             autostart: false,
             auto_connect: false,
@@ -219,13 +227,13 @@ pub fn load_config(paths: &AppPaths) -> Result<AppConfig> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => AppConfig::default(),
         Err(error) => return Err(error).context("failed to read config"),
     };
+    config.legacy_ssh_password = !config.ssh_password.is_empty();
+    config.legacy_key_password = !config.key_password.is_empty();
     config.autostart = is_autostart_enabled();
     Ok(config)
 }
 
-/// Write the config file, readable only by the user. Secrets are left out;
-/// see [`save_secrets`].
-pub fn save_config(paths: &AppPaths, config: &AppConfig) -> Result<()> {
+fn write_config(paths: &AppPaths, config: &AppConfig) -> Result<()> {
     fs::create_dir_all(&paths.config_dir).context("failed to create config directory")?;
     let text = toml::to_string_pretty(config).context("failed to serialize config")?;
     // A temporary file is created with mode 0600 and renamed into place, so
@@ -240,26 +248,58 @@ pub fn save_config(paths: &AppPaths, config: &AppConfig) -> Result<()> {
     Ok(())
 }
 
-/// Fill in the secrets from the Keychain, first moving any that an older
-/// version left in the config file.
 pub fn load_secrets(paths: &AppPaths, config: &mut AppConfig) -> Result<()> {
-    if !config.ssh_password.is_empty() || !config.key_password.is_empty() {
-        keychain::set(keychain::SSH_PASSWORD, &config.ssh_password)?;
-        keychain::set(keychain::KEY_PASSPHRASE, &config.key_password)?;
-        return save_config(paths, config).context("failed to remove secrets from config");
+    let migration = if config.legacy_ssh_password || config.legacy_key_password {
+        save_config(paths, config, config.clone()).context("failed to migrate legacy credentials")
+    } else {
+        Ok(())
+    };
+    if config.ssh_password.is_empty() {
+        config.ssh_password = keychain::get(keychain::SSH_PASSWORD)?;
     }
-    config.ssh_password = keychain::get(keychain::SSH_PASSWORD)?;
-    config.key_password = keychain::get(keychain::KEY_PASSPHRASE)?;
-    Ok(())
+    if config.key_password.is_empty() {
+        config.key_password = keychain::get(keychain::KEY_PASSPHRASE)?;
+    }
+    migration
 }
 
-/// Store the secrets that differ between `old` and `new` in the Keychain.
-pub fn save_secrets(old: &AppConfig, new: &AppConfig) -> Result<()> {
-    if new.ssh_password != old.ssh_password {
-        keychain::set(keychain::SSH_PASSWORD, &new.ssh_password)?;
+pub fn save_config(paths: &AppPaths, current: &mut AppConfig, new: AppConfig) -> Result<()> {
+    // Replacing the TOML removes its plaintext credentials. Keep the old file
+    // until every credential it holds has reached the Keychain.
+    if current.legacy_ssh_password {
+        keychain::set(keychain::SSH_PASSWORD, &current.ssh_password)?;
+        current.legacy_ssh_password = false;
     }
-    if new.key_password != old.key_password {
-        keychain::set(keychain::KEY_PASSPHRASE, &new.key_password)?;
+    if current.legacy_key_password {
+        keychain::set(keychain::KEY_PASSPHRASE, &current.key_password)?;
+        current.legacy_key_password = false;
+    }
+    write_config(paths, &new)?;
+    // Each store can fail independently. Keep the saved settings in memory
+    // so the form still shows exactly which edits need to be retried.
+    *current = AppConfig {
+        ssh_password: std::mem::take(&mut current.ssh_password),
+        key_password: std::mem::take(&mut current.key_password),
+        legacy_ssh_password: false,
+        legacy_key_password: false,
+        ..new
+    };
+    save_secret(
+        keychain::SSH_PASSWORD,
+        &mut current.ssh_password,
+        new.ssh_password,
+    )?;
+    save_secret(
+        keychain::KEY_PASSPHRASE,
+        &mut current.key_password,
+        new.key_password,
+    )
+}
+
+fn save_secret(account: &str, current: &mut String, new: String) -> Result<()> {
+    if *current != new {
+        keychain::set(account, &new)?;
+        *current = new;
     }
     Ok(())
 }
